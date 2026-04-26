@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="bn"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signal Pro v5 — Assets</title>
+<link rel="stylesheet" href="/css/shared.css">
+<style>
+.page-inner{max-width:900px;margin:0 auto}
+.asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-bottom:16px}
+.acard{background:var(--bg2);border:1px solid var(--b2);border-radius:9px;padding:14px 16px}
+.acard-top{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.aflag2{font-size:22px}.ainfo{flex:1}
+.aname{font-size:13px;font-weight:600;color:#fff}.asym{font-size:10px;color:var(--mu);font-family:var(--mono)}
+.amkt{font-size:9px;padding:1px 6px;border-radius:4px;background:var(--bg4);color:var(--mu2)}
+.acard-switches{display:flex;flex-direction:column;gap:8px}
+.sw-row{display:flex;justify-content:space-between;align-items:center}
+.sw-lbl{font-size:11px;color:var(--mu2)}.sw-lbl b{color:var(--text)}
+.add-form{background:var(--bg2);border:1px solid var(--b2);border-radius:9px;padding:18px}
+.add-grid{display:grid;grid-template-columns:1fr 1fr 80px 100px auto;gap:10px;align-items:end}
+.fg{display:flex;flex-direction:column;gap:5px}
+.fg label{font-size:10px;color:var(--mu2);text-transform:uppercase;letter-spacing:.05em}
+.saved-msg{color:var(--up);font-size:11px;margin-top:8px;display:none}
+</style>
+</head><body>
+<nav id="nav">
+  <a class="nav-logo" href="/">⚡ Signal<b>Pro</b> <span style="font-size:10px;color:var(--mu)">v5</span></a>
+  <div class="nav-links">
+    <a class="nav-link" href="/dashboard">Dashboard</a>
+    <a class="nav-link" href="/signals">Signals</a>
+    <a class="nav-link active" href="/assets">Assets</a>
+    <a class="nav-link" href="/strategies">Strategies</a>
+    <a class="nav-link" href="/settings">Settings</a>
+  </div>
+  <div class="nav-right">
+    <span id="nav-user"></span>
+    <button class="kill-pill sys-on" id="sys-kill" onclick="toggleSystem()"><span class="dot"></span>⚡ System ON</button>
+    <button class="kill-pill ai-on" id="ai-kill" onclick="toggleAI()"><span class="dot"></span>🧠 AI ON</button>
+    <button class="hbtn red" onclick="logout()">Logout</button>
+  </div>
+</nav>
+
+<div class="page">
+<div class="page-inner">
+  <div class="page-title">📡 Asset Management</div>
+
+  <!-- Info boxes -->
+  <div style="display:flex;gap:10px;margin-bottom:16px">
+    <div class="card" style="flex:1;margin:0;padding:12px 14px">
+      <div style="font-size:11px;color:var(--mu2);line-height:1.9">
+        <b style="color:#fff">Live (চার্ট তৈরি):</b> এই asset এর live data আসবে এবং candle chart তৈরি হবে<br>
+        <b style="color:#fff">Signal:</b> শুধুমাত্র এই asset থেকে সিগন্যাল generate হবে (Live ON থাকা আবশ্যক)
+      </div>
+    </div>
+  </div>
+
+  <!-- Asset Cards -->
+  <div class="asset-grid" id="asset-grid"></div>
+
+  <!-- Add Asset -->
+  <div class="add-form">
+    <div style="font-size:12px;font-weight:600;color:#fff;margin-bottom:12px">+ নতুন Asset যোগ করুন</div>
+    <div class="add-grid">
+      <div class="fg"><label>Symbol</label><input id="ns" placeholder="EURUSD-OTCq"></div>
+      <div class="fg"><label>Name</label><input id="nn" placeholder="EUR/USD"></div>
+      <div class="fg"><label>Flag</label><input id="nf" placeholder="🇪🇺🇺🇸" style="font-size:16px"></div>
+      <div class="fg"><label>Market</label><select id="nm"><option value="OTC">OTC</option><option value="FOREX">FOREX</option></select></div>
+      <div class="fg"><label>&nbsp;</label><button class="btn primary" onclick="addAsset()">+ Add</button></div>
+    </div>
+    <div class="saved-msg" id="add-ok">✅ Asset যোগ হয়েছে!</div>
+  </div>
+</div>
+</div>
+
+<script src="/js/shared.js"></script>
+<script>
+let assets=[];
+
+async function load(){
+  const [data,state]=await Promise.all([api('/api/assets'),api('/api/state')]);
+  assets=data;
+  updateKillBtns(state.running,state.aiEnabled);
+  render();
+}
+
+function render(){
+  const grid=document.getElementById('asset-grid');grid.innerHTML='';
+  assets.forEach(a=>{
+    const card=document.createElement('div');card.className='acard';
+    card.innerHTML=
+      `<div class="acard-top">`+
+        `<span class="aflag2">${a.flag||'🔵'}</span>`+
+        `<div class="ainfo"><div class="aname">${a.name}</div><div class="asym">${a.symbol}</div></div>`+
+        `<span class="amkt">${a.market||'OTC'}</span>`+
+      `</div>`+
+      `<div class="acard-switches">`+
+        `<div class="sw-row"><span class="sw-lbl">📡 <b>Live</b> (Candle Chart)</span>`+
+          `<label class="tgl"><input type="checkbox" ${a.live?'checked':''} onchange="toggle('${a.symbol}','live',this.checked)">`+
+          `<div class="ttrack"></div><div class="tthumb"></div></label></div>`+
+        `<div class="sw-row"><span class="sw-lbl">⚡ <b>Signal</b> Generate</span>`+
+          `<label class="tgl"><input type="checkbox" ${a.signal_on?'checked':''} onchange="toggle('${a.symbol}','signal',this.checked)">`+
+          `<div class="ttrack"></div><div class="tthumb"></div></label></div>`+
+      `</div>`;
+    grid.appendChild(card);
+  });
+}
+
+async function toggle(sym,type,val){
+  const a=assets.find(x=>x.symbol===sym);if(!a)return;
+  if(type==='live')a.live=val?1:0;
+  else a.signal_on=val?1:0;
+  // If signal_on but live is off, auto-enable live
+  if(type==='signal'&&val&&!a.live){a.live=1;render();}
+  await api('/api/assets/update','POST',[{symbol:sym,live:a.live,signal_on:a.signal_on}]);
+}
+
+async function addAsset(){
+  const s=document.getElementById('ns').value.trim(),n=document.getElementById('nn').value.trim();
+  const f=document.getElementById('nf').value.trim(),m=document.getElementById('nm').value;
+  if(!s||!n){alert('Symbol ও Name দিন');return;}
+  const r=await api('/api/assets/add','POST',{symbol:s,name:n,flag:f||'🔵',market:m});
+  if(r.ok){
+    ['ns','nn','nf'].forEach(id=>document.getElementById(id).value='');
+    const ok=document.getElementById('add-ok');ok.style.display='block';setTimeout(()=>ok.style.display='none',2500);
+    await load();
+  }
+}
+
+load();
+</script>
+</body></html>

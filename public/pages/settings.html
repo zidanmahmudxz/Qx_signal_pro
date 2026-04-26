@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="bn"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signal Pro v5 — Settings</title>
+<link rel="stylesheet" href="/css/shared.css">
+<style>
+.page-inner{max-width:860px;margin:0 auto}
+.sec{background:var(--bg2);border:1px solid var(--b2);border-radius:10px;margin-bottom:18px;overflow:hidden}
+.sec-hdr{padding:13px 16px;border-bottom:1px solid var(--b1);font-size:13px;font-weight:600;color:#fff;display:flex;justify-content:space-between;align-items:center}
+.sec-body{padding:16px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.form-row.cols3{grid-template-columns:1fr 1fr 1fr}
+.fg{display:flex;flex-direction:column;gap:5px}
+.fg label{font-size:10px;color:var(--mu2);text-transform:uppercase;letter-spacing:.06em}
+.fg .hint{font-size:10px;color:var(--mu);margin-top:3px;line-height:1.6}
+.ok-msg{color:var(--up);font-size:11px;margin-top:8px;display:none}
+
+/* Kill switches */
+.kill-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.kill-box{border-radius:9px;padding:16px;border:1px solid var(--b2);display:flex;align-items:center;gap:12px}
+.kill-box.running{background:rgba(38,166,154,.08);border-color:rgba(38,166,154,.3)}
+.kill-box.stopped{background:rgba(239,83,80,.08);border-color:rgba(239,83,80,.3)}
+.kill-box.ai-on-box{background:rgba(33,150,243,.08);border-color:rgba(33,150,243,.3)}
+.kill-box.ai-off-box{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.3)}
+.kill-icon{font-size:28px}
+.kill-info{flex:1}
+.kill-info h3{font-size:13px;font-weight:600;color:#fff;margin-bottom:3px}
+.kill-info p{font-size:10px;color:var(--mu2);line-height:1.6}
+.kill-big{padding:10px 20px;border-radius:8px;border:none;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s}
+.kill-big.on{background:var(--upd);color:var(--up);border:1px solid rgba(38,166,154,.4)}
+.kill-big.off{background:var(--dnd);color:var(--dn);border:1px solid rgba(239,83,80,.4)}
+.kill-big.ai-on2{background:var(--accd);color:var(--acc);border:1px solid rgba(33,150,243,.4)}
+.kill-big.ai-off2{background:rgba(245,158,11,.15);color:var(--gold);border:1px solid rgba(245,158,11,.4)}
+
+/* TG Chats */
+.chat-row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg3);border:1px solid var(--b1);border-radius:7px;margin-bottom:7px}
+.chat-info{flex:1}
+.chat-name{font-size:12px;font-weight:600;color:#fff}
+.chat-id{font-size:10px;color:var(--mu);font-family:var(--mono)}
+.chat-perms{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+.perm-chip{font-size:9px;padding:2px 7px;border-radius:10px;background:var(--bg4);color:var(--mu2)}
+.perm-chip.on{background:var(--accd);color:var(--acc)}
+
+/* Perm checkboxes */
+.perm-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:8px}
+.pck{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--mu2)}
+.pck input{width:auto}
+
+/* Future signal upload */
+.fut-upload{background:var(--bg3);border:1px solid var(--b2);border-radius:7px;padding:12px}
+.fut-upload textarea{min-height:100px;font-family:var(--mono);font-size:11px;resize:vertical}
+.fut-sources-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.src-row{display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg3);border-radius:6px;font-size:11px}
+.src-row .cid{font-family:var(--mono);color:var(--mu);flex:1}
+</style>
+</head><body>
+<nav id="nav">
+  <a class="nav-logo" href="/">⚡ Signal<b>Pro</b> <span style="font-size:10px;color:var(--mu)">v5</span></a>
+  <div class="nav-links">
+    <a class="nav-link" href="/dashboard">Dashboard</a>
+    <a class="nav-link" href="/signals">Signals</a>
+    <a class="nav-link" href="/assets">Assets</a>
+    <a class="nav-link" href="/strategies">Strategies</a>
+    <a class="nav-link active" href="/settings">Settings</a>
+  </div>
+  <div class="nav-right"><span id="nav-user"></span><button class="hbtn red" onclick="logout()">Logout</button></div>
+</nav>
+
+<div class="page"><div class="page-inner">
+<div class="page-title">⚙️ Settings</div>
+
+<!-- KILL SWITCHES -->
+<div class="sec">
+  <div class="sec-hdr">⚡ System Control</div>
+  <div class="sec-body">
+    <div class="kill-grid">
+      <div class="kill-box" id="sys-box">
+        <span class="kill-icon">⚡</span>
+        <div class="kill-info">
+          <h3>System Kill Switch</h3>
+          <p>সিস্টেম চালু/বন্ধ করুন। বন্ধ করলে সব stream ও signal বন্ধ হবে। Data থাকবে।</p>
+        </div>
+        <button class="kill-big on" id="sys-big" onclick="toggleSys()">ON</button>
+      </div>
+      <div class="kill-box" id="ai-box">
+        <span class="kill-icon">🧠</span>
+        <div class="kill-info">
+          <h3>AI Kill Switch</h3>
+          <p>AI বন্ধ করলে শুধু Strategy দিয়ে signal generate হবে। Groq/Gemini call হবে না।</p>
+        </div>
+        <button class="kill-big ai-on2" id="ai-big" onclick="toggleAISys()">AI ON</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SIGNAL SETTINGS -->
+<div class="sec">
+  <div class="sec-hdr">📊 Signal Configuration</div>
+  <div class="sec-body">
+    <div class="form-row cols3">
+      <div class="fg">
+        <label>AI Min Confidence (%)</label>
+        <input type="number" id="ai-conf" min="50" max="100" value="72">
+        <div class="hint">এর নিচে confidence হলে signal skip</div>
+      </div>
+      <div class="fg">
+        <label>Signal Cooldown (second)</label>
+        <input type="number" id="cooldown" min="0" max="600" value="120">
+        <div class="hint">একই asset এ পরপর signal এর মধ্যে বিরতি</div>
+      </div>
+      <div class="fg">
+        <label>Signal Cutoff (second)</label>
+        <input type="number" id="cutoff" min="0" max="55" value="10">
+        <div class="hint">Entry time এর এত second পরে signal deliver হবে না</div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="fg">
+        <label>Future Signal Pre-Delivery (minutes)</label>
+        <input type="number" id="fut-pre" min="1" max="10" value="1">
+        <div class="hint">Future signal এন্ট্রি টাইমের কত মিনিট আগে পাঠাবে</div>
+      </div>
+      <div class="fg">
+        <label>Candle Timeframe (seconds)</label>
+        <input type="number" id="candle-tf" min="60" max="300" value="60">
+        <div class="hint">Default: 60 (1 minute)</div>
+      </div>
+    </div>
+    <button class="btn primary" onclick="saveSignalSettings()">💾 Save Signal Settings</button>
+    <div class="ok-msg" id="sig-ok">✅ সেভ হয়েছে!</div>
+  </div>
+</div>
+
+<!-- CUSTOM MESSAGE -->
+<div class="sec">
+  <div class="sec-hdr">💬 Custom Signal Message</div>
+  <div class="sec-body">
+    <div class="fg">
+      <label>Message (প্রতিটি signal এ যোগ হবে)</label>
+      <textarea id="custom-msg" rows="2" placeholder="যেমন: 💰 $10 invest করুন | Martingale 3x"></textarea>
+      <div class="hint">Dashboard ও Telegram উভয় জায়গায় দেখাবে (Chat ID permission এর উপর নির্ভর করে)</div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+      <button class="btn primary" onclick="saveCustomMsg()">💾 Save Message</button>
+      <button class="btn ghost" onclick="clearCustomMsg()">✕ Clear</button>
+      <span id="msg-ok" class="ok-msg" style="display:none">✅ Saved!</span>
+    </div>
+  </div>
+</div>
+
+<!-- TELEGRAM CHATS -->
+<div class="sec">
+  <div class="sec-hdr">📱 Telegram Chat IDs</div>
+  <div class="sec-body">
+    <div id="chat-list"></div>
+    <!-- Add Chat -->
+    <div style="background:var(--bg3);border:1px solid var(--b1);border-radius:8px;padding:14px;margin-top:8px">
+      <div style="font-size:11px;font-weight:600;color:#fff;margin-bottom:10px">+ নতুন Chat ID যোগ করুন</div>
+      <div class="form-row">
+        <div class="fg"><label>Chat ID</label><input id="nc-id" placeholder="-1001234567890" type="text"></div>
+        <div class="fg"><label>Name / Label</label><input id="nc-name" placeholder="Premium Members"></div>
+      </div>
+      <div style="font-size:10px;color:var(--mu2);margin-bottom:8px">Permissions:</div>
+      <div class="perm-grid">
+        <label class="pck"><input type="checkbox" id="p-ls" checked> Live Signal</label>
+        <label class="pck"><input type="checkbox" id="p-fp" checked> Future Pre</label>
+        <label class="pck"><input type="checkbox" id="p-fr" checked> Future Result</label>
+        <label class="pck"><input type="checkbox" id="p-lr" checked> Live Result</label>
+        <label class="pck"><input type="checkbox" id="p-cm" checked> Custom Msg</label>
+      </div>
+      <button class="btn primary" style="margin-top:10px" onclick="addChat()">+ Add Chat ID</button>
+      <div class="ok-msg" id="chat-ok">✅ যোগ হয়েছে!</div>
+    </div>
+  </div>
+</div>
+
+<!-- FUTURE SIGNAL SOURCES -->
+<div class="sec">
+  <div class="sec-hdr">🤖 Future Signal — Bot Sources</div>
+  <div class="sec-body">
+    <div style="font-size:11px;color:var(--mu2);margin-bottom:12px;line-height:1.8">
+      এই Chat ID গুলো থেকে Telegram Bot এ Future Signal list পাঠালে সিস্টেম গ্রহণ করবে।<br>
+      Bot এ <code>/start</code> পাঠান এবং আপনার Chat ID জানতে @userinfobot ব্যবহার করুন।
+    </div>
+    <div class="fut-sources-list" id="src-list"></div>
+    <div style="display:flex;gap:8px;align-items:end">
+      <div class="fg" style="flex:1"><label>Chat ID</label><input id="src-id" placeholder="-1001234567890"></div>
+      <div class="fg" style="flex:1"><label>Name</label><input id="src-name" placeholder="Admin"></div>
+      <button class="btn primary" onclick="addSrc()">+ Add Source</button>
+    </div>
+  </div>
+</div>
+
+<!-- MANUAL FUTURE SIGNAL UPLOAD -->
+<div class="sec">
+  <div class="sec-hdr">📋 Future Signal — Manual Upload</div>
+  <div class="sec-body">
+    <div class="fut-upload">
+      <div style="font-size:11px;color:var(--mu2);margin-bottom:8px">নিচের format এ Future Signal list paste করুন:</div>
+      <textarea id="fut-text" placeholder="1. 14:41 USD/COP OTC DOWN ⏬&#10;2. 14:46 USD/COP OTC UP 🔼&#10;3. 14:47 USD/COP OTC UP 🔼&#10;4. 15:06 USD/PKR OTC UP 🔼"></textarea>
+      <button class="btn primary" style="margin-top:8px" onclick="uploadFuture()">📤 Upload Signals</button>
+      <div class="ok-msg" id="fut-ok"></div>
+    </div>
+  </div>
+</div>
+
+</div></div>
+<script src="/js/shared.js"></script>
+<script>
+let sysRunning=true, aiEnabled=true;
+
+async function init(){
+  const [settings,chats,sources,state]=await Promise.all([
+    api('/api/settings'), api('/api/tgchats'), api('/api/future-sources'), api('/api/state')
+  ]);
+  sysRunning=state.running; aiEnabled=state.aiEnabled;
+  updateSysUI(); updateAIUI();
+
+  document.getElementById('ai-conf').value=settings.ai_min_confidence||72;
+  document.getElementById('cooldown').value=parseInt((settings.cooldown_ms||120000)/1000);
+  document.getElementById('cutoff').value=settings.signal_cutoff_sec||10;
+  document.getElementById('fut-pre').value=settings.future_pre_minutes||1;
+  document.getElementById('candle-tf').value=settings.candle_tf||60;
+  document.getElementById('custom-msg').value=settings.custom_msg||'';
+
+  renderChats(chats);
+  renderSources(sources);
+}
+
+function updateSysUI(){
+  const box=document.getElementById('sys-box'), btn=document.getElementById('sys-big');
+  box.className='kill-box '+(sysRunning?'running':'stopped');
+  btn.className='kill-big '+(sysRunning?'on':'off');
+  btn.textContent=sysRunning?'⚡ ON':'⛔ OFF';
+  updateKillBtns(sysRunning, aiEnabled);
+}
+
+function updateAIUI(){
+  const box=document.getElementById('ai-box'), btn=document.getElementById('ai-big');
+  box.className='kill-box '+(aiEnabled?'ai-on-box':'ai-off-box');
+  btn.className='kill-big '+(aiEnabled?'ai-on2':'ai-off2');
+  btn.textContent=aiEnabled?'🧠 AI ON':'🧠 AI OFF';
+  updateKillBtns(sysRunning, aiEnabled);
+}
+
+async function toggleSys(){
+  if(!confirm(sysRunning?'System বন্ধ করবেন?':'System চালু করবেন?'))return;
+  await api('/api/system/kill','POST',{running:!sysRunning});
+  sysRunning=!sysRunning; updateSysUI();
+}
+
+async function toggleAISys(){
+  await api('/api/system/ai-toggle','POST',{enabled:!aiEnabled});
+  aiEnabled=!aiEnabled; updateAIUI();
+}
+
+async function saveSignalSettings(){
+  const coolMs=parseInt(document.getElementById('cooldown').value)*1000;
+  await api('/api/settings/save','POST',{
+    ai_min_confidence: document.getElementById('ai-conf').value,
+    cooldown_ms: coolMs,
+    signal_cutoff_sec: document.getElementById('cutoff').value,
+    future_pre_minutes: document.getElementById('fut-pre').value,
+    candle_tf: document.getElementById('candle-tf').value,
+  });
+  flash('sig-ok');
+}
+
+async function saveCustomMsg(){
+  const msg=document.getElementById('custom-msg').value.trim();
+  await api('/api/settings/save','POST',{custom_msg:msg});
+  flash('msg-ok');
+}
+
+async function clearCustomMsg(){
+  document.getElementById('custom-msg').value='';
+  await api('/api/settings/save','POST',{custom_msg:''});
+  flash('msg-ok');
+}
+
+// CHATS
+function renderChats(chats){
+  const box=document.getElementById('chat-list');box.innerHTML='';
+  if(!chats.length){box.innerHTML='<div style="color:var(--mu);font-size:11px;padding:8px 0">Chat ID নেই। নিচে যোগ করুন।</div>';return;}
+  chats.forEach(c=>{
+    const PERMS=[
+      {key:'perm_live_signal',label:'Live Signal'},
+      {key:'perm_future_pre',label:'Future Pre'},
+      {key:'perm_future_result',label:'Future Result'},
+      {key:'perm_live_result',label:'Live Result'},
+      {key:'perm_custom_msg',label:'Custom Msg'},
+    ];
+    const row=document.createElement('div');row.className='chat-row';
+    row.innerHTML=
+      `<div class="chat-info">`+
+        `<div class="chat-name">${c.name}</div>`+
+        `<div class="chat-id">${c.chat_id}</div>`+
+        `<div class="chat-perms">${PERMS.map(p=>`<span class="perm-chip ${c[p.key]?'on':''}">${p.label}</span>`).join('')}</div>`+
+      `</div>`+
+      `<div style="display:flex;gap:6px">`+
+        `<button class="btn ghost" onclick="editChat('${c.chat_id}')">Edit</button>`+
+        `<button class="btn danger" onclick="delChat('${c.chat_id}')">✕</button>`+
+      `</div>`;
+    box.appendChild(row);
+  });
+}
+
+async function addChat(){
+  const id=document.getElementById('nc-id').value.trim(),name=document.getElementById('nc-name').value.trim();
+  if(!id||!name){alert('Chat ID ও Name দিন');return;}
+  const perms={
+    live:document.getElementById('p-ls').checked,
+    futPre:document.getElementById('p-fp').checked,
+    futRes:document.getElementById('p-fr').checked,
+    liveRes:document.getElementById('p-lr').checked,
+    customMsg:document.getElementById('p-cm').checked,
+  };
+  const r=await api('/api/tgchats/add','POST',{chatId:id,name,perms});
+  if(r.ok){document.getElementById('nc-id').value='';document.getElementById('nc-name').value='';flash('chat-ok');renderChats(await api('/api/tgchats'));}
+}
+
+async function editChat(chatId){
+  const chats=await api('/api/tgchats');
+  const c=chats.find(x=>x.chat_id===chatId);if(!c)return;
+  const PKEYS=['perm_live_signal','perm_future_pre','perm_future_result','perm_live_result','perm_custom_msg'];
+  const PLABELS=['Live Signal','Future Pre','Future Result','Live Result','Custom Msg'];
+  const vals=PKEYS.map(k=>c[k]?1:0);
+  const newVals=prompt(`Permissions for "${c.name}" (1=on, 0=off):\n${PLABELS.join(', ')}\n\nCurrent: ${vals.join(',')}`, vals.join(','));
+  if(!newVals)return;
+  const parts=newVals.split(',').map(Number);
+  const updates={};PKEYS.forEach((k,i)=>updates[k]=parts[i]||0);
+  await api('/api/tgchats/update','POST',{chatId,...updates});
+  renderChats(await api('/api/tgchats'));
+}
+
+async function delChat(chatId){
+  if(!confirm('এই Chat ID মুছবেন?'))return;
+  await api('/api/tgchats/delete','POST',{chatId});
+  renderChats(await api('/api/tgchats'));
+}
+
+// FUTURE SOURCES
+function renderSources(sources){
+  const box=document.getElementById('src-list');box.innerHTML='';
+  if(!sources.length){box.innerHTML='<div style="color:var(--mu);font-size:11px">Source নেই।</div>';return;}
+  sources.forEach(s=>{
+    const row=document.createElement('div');row.className='src-row';
+    row.innerHTML=`<span>${s.name||'Unknown'}</span><span class="cid">${s.chat_id}</span>`+
+      `<button class="btn danger" style="padding:3px 8px" onclick="removeSrc('${s.chat_id}')">✕</button>`;
+    box.appendChild(row);
+  });
+}
+
+async function addSrc(){
+  const id=document.getElementById('src-id').value.trim(),name=document.getElementById('src-name').value.trim();
+  if(!id){alert('Chat ID দিন');return;}
+  await api('/api/future-sources/add','POST',{chatId:id,name:name||id});
+  document.getElementById('src-id').value='';document.getElementById('src-name').value='';
+  renderSources(await api('/api/future-sources'));
+}
+
+async function removeSrc(chatId){
+  if(!confirm('Remove করবেন?'))return;
+  await api('/api/future-sources/remove','POST',{chatId});
+  renderSources(await api('/api/future-sources'));
+}
+
+// FUTURE UPLOAD
+async function uploadFuture(){
+  const text=document.getElementById('fut-text').value.trim();
+  if(!text){alert('Signal list paste করুন');return;}
+  const r=await api('/api/future/upload','POST',{text});
+  const ok=document.getElementById('fut-ok');
+  if(r.ok){ok.textContent=`✅ ${r.count}টি signal upload হয়েছে!`;ok.style.display='block';document.getElementById('fut-text').value='';}
+  else{ok.textContent='❌ Parse error: '+r.error;ok.style.display='block';ok.style.color='var(--dn)';}
+  setTimeout(()=>ok.style.display='none',4000);
+}
+
+function flash(id){
+  const el=document.getElementById(id);if(!el)return;
+  el.style.display='block';setTimeout(()=>el.style.display='none',2500);
+}
+
+init();
+</script>
+</body></html>

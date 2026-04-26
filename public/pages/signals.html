@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="bn"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signal Pro v5 — Signals</title>
+<link rel="stylesheet" href="/css/shared.css">
+<style>
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.filters select,.filters input{width:auto;padding:6px 10px;font-size:12px}
+.dir-b{font-size:10px;font-weight:700;font-family:var(--mono);padding:2px 8px;border-radius:4px}
+.dir-b.CALL{background:var(--upd);color:var(--up)}.dir-b.PUT{background:var(--dnd);color:var(--dn)}
+.cb{width:60px;height:4px;background:var(--bg4);border-radius:2px;overflow:hidden;display:inline-block;vertical-align:middle;margin-left:4px}
+.cf{height:100%;border-radius:2px;background:var(--acc)}
+</style>
+</head><body>
+<nav id="nav">
+  <a class="nav-logo" href="/">⚡ Signal<b>Pro</b> <span style="font-size:10px;color:var(--mu)">v5</span></a>
+  <div class="nav-links">
+    <a class="nav-link" href="/dashboard">Dashboard</a>
+    <a class="nav-link active" href="/signals">Signals</a>
+    <a class="nav-link" href="/assets">Assets</a>
+    <a class="nav-link" href="/strategies">Strategies</a>
+    <a class="nav-link" href="/settings">Settings</a>
+  </div>
+  <div class="nav-right"><span id="nav-user"></span><button class="hbtn red" onclick="logout()">Logout</button></div>
+</nav>
+
+<div class="page">
+<div class="page-inner" style="max-width:1100px;margin:0 auto">
+  <div class="stat-row" style="margin-top:4px">
+    <div class="stat-card"><div class="sv" id="s-t">—</div><div class="sl">Total</div></div>
+    <div class="stat-card"><div class="sv" style="color:var(--up)" id="s-w">—</div><div class="sl">Wins</div></div>
+    <div class="stat-card"><div class="sv" style="color:var(--dn)" id="s-l">—</div><div class="sl">Loss</div></div>
+    <div class="stat-card"><div class="sv" style="color:var(--gold)" id="s-r">—%</div><div class="sl">Win Rate</div></div>
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <div class="stat-card" style="flex:1"><div class="sv" style="color:var(--up);font-size:16px" id="s-tw">—</div><div class="sl">আজকের Win</div></div>
+    <div class="stat-card" style="flex:1"><div class="sv" style="color:var(--dn);font-size:16px" id="s-tl">—</div><div class="sl">আজকের Loss</div></div>
+    <div class="stat-card" style="flex:1"><div class="sv" style="color:var(--acc);font-size:16px" id="s-a">—</div><div class="sl">Active</div></div>
+  </div>
+
+  <div class="filters">
+    <select id="f-res" onchange="load()"><option value="">All Results</option><option value="active">Active</option><option value="WIN">WIN</option><option value="LOSS">LOSS</option><option value="TIE">TIE</option></select>
+    <select id="f-sym" onchange="load()"><option value="">All Assets</option></select>
+    <select id="f-dir" onchange="load()"><option value="">All Direction</option><option value="CALL">CALL</option><option value="PUT">PUT</option></select>
+    <input id="f-q" placeholder="Search..." oninput="filterTable()" style="width:130px">
+    <button class="btn ghost" onclick="load()">↺ Refresh</button>
+  </div>
+
+  <div class="card" style="overflow:hidden">
+    <div style="overflow-x:auto">
+    <table class="tbl" id="sig-tbl">
+      <thead><tr>
+        <th>Direction</th><th>Asset</th><th>Entry Time</th><th>Expiry</th>
+        <th>AI Conf</th><th>Strategies</th><th>Result</th><th>PnL</th><th>Custom Msg</th>
+      </tr></thead>
+      <tbody id="sig-body"></tbody>
+    </table>
+    </div>
+    <div id="no-data" style="padding:30px;text-align:center;color:var(--mu);display:none">Signal নেই</div>
+  </div>
+</div>
+</div>
+
+<script src="/js/shared.js"></script>
+<script>
+async function load(){
+  const f=document.getElementById('f-res').value,s=document.getElementById('f-sym').value;
+  let url='/api/signals?';if(f)url+='filter='+f+'&';if(s)url+='symbol='+s+'&';
+  const [sigs,stats,assets]=await Promise.all([api(url),api('/api/stats'),api('/api/assets')]);
+
+  const pSel=document.getElementById('f-sym');
+  if(pSel.options.length<=1){assets.filter(a=>a.live).forEach(a=>{const o=document.createElement('option');o.value=a.symbol;o.textContent=a.name;pSel.appendChild(o);});}
+
+  document.getElementById('s-t').textContent=stats.total;
+  document.getElementById('s-w').textContent=stats.wins;
+  document.getElementById('s-l').textContent=stats.losses;
+  document.getElementById('s-r').textContent=(stats.winRate||'0')+'%';
+  document.getElementById('s-tw').textContent=stats.todayWins||0;
+  document.getElementById('s-tl').textContent=stats.todayLoss||0;
+  document.getElementById('s-a').textContent=stats.active||0;
+
+  const tbody=document.getElementById('sig-body');tbody.innerHTML='';
+  const dirF=document.getElementById('f-dir').value;
+  const filtered=sigs.filter(s=>!dirF||s.direction===dirF);
+
+  if(!filtered.length){document.getElementById('no-data').style.display='block';document.getElementById('sig-tbl').style.display='none';return;}
+  document.getElementById('no-data').style.display='none';document.getElementById('sig-tbl').style.display='table';
+
+  filtered.forEach(s=>{
+    const et=new Date(s.entry_time*1000).toLocaleString('en-GB',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const xt=new Date(s.expiry_time*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const result=s.result||s.status||'active';
+    const strats=Array.isArray(s.matched_strategies)?s.matched_strategies.slice(0,2).map(x=>x.name||x).join(', '):'AI';
+    const conf=s.confidence||0;
+    const tr=document.createElement('tr');
+    tr.innerHTML=
+      `<td><span class="dir-b ${s.direction}">${s.direction==='CALL'?'▲ CALL':'▼ PUT'}</span></td>`+
+      `<td>${s.flag||''} <b>${s.name}</b> <span style="font-size:9px;color:var(--mu)">${s.market||'OTC'}</span></td>`+
+      `<td style="font-family:var(--mono);font-size:11px">${et}</td>`+
+      `<td style="font-family:var(--mono);font-size:11px">${xt}</td>`+
+      `<td><span style="font-family:var(--mono);font-size:11px">${conf}%</span><div class="cb"><div class="cf" style="width:${conf}%"></div></div></td>`+
+      `<td style="font-size:10px;color:var(--mu2)">${strats}</td>`+
+      `<td><span class="rb ${result}">${result}</span></td>`+
+      `<td style="font-family:var(--mono);font-size:11px;color:${s.pnl&&s.pnl.startsWith('+')?'#26a69a':s.pnl==='-100%'?'#ef5350':'#f59e0b'}">${s.pnl||'—'}</td>`+
+      `<td style="font-size:10px;color:var(--gold)">${s.custom_msg||'—'}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function filterTable(){
+  const q=document.getElementById('f-q').value.toLowerCase();
+  document.querySelectorAll('#sig-body tr').forEach(tr=>{tr.style.display=tr.textContent.toLowerCase().includes(q)?'':'none';});
+}
+
+load();
+</script>
+</body></html>

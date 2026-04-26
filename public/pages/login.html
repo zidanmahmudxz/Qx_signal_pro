@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="bn"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signal Pro v5 — Login</title>
+<link rel="stylesheet" href="/css/shared.css">
+<style>
+body{display:flex;align-items:center;justify-content:center;overflow:auto}
+.wrap{width:100%;max-width:360px;padding:20px}
+.logo{text-align:center;margin-bottom:28px}
+.logo h1{font-size:24px;font-weight:700;color:#fff}.logo h1 b{color:var(--acc)}
+.logo p{font-size:11px;color:var(--mu);margin-top:5px}
+.lcard{background:var(--bg2);border:1px solid var(--b2);border-radius:12px;padding:26px 22px}
+.lcard h2{font-size:13px;color:var(--mu2);text-align:center;margin-bottom:18px;font-weight:400}
+.fg{margin-bottom:13px}
+.fg label{display:block;font-size:10px;color:var(--mu2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
+.err{color:var(--dn);font-size:11px;text-align:center;min-height:16px;margin-top:8px}
+</style>
+</head><body>
+<div class="wrap">
+  <div class="logo"><h1>⚡ Signal<b>Pro</b> <span style="font-size:13px;color:var(--mu)">v5</span></h1><p>Quotex Binary Options · AI Signal Generator</p></div>
+  <div class="lcard">
+    <h2>আপনার অ্যাকাউন্টে লগিন করুন</h2>
+    <div class="fg"><label>Username</label><input id="u" type="text" placeholder="admin" autocomplete="username"></div>
+    <div class="fg"><label>Password</label><input id="p" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+    <button class="btn primary" style="width:100%;justify-content:center" id="btn" onclick="doLogin()">লগিন করুন →</button>
+    <div class="err" id="err"></div>
+  </div>
+</div>
+<script>
+document.getElementById('p').onkeydown=e=>{if(e.key==='Enter')doLogin();};
+async function doLogin(){
+  const btn=document.getElementById('btn'),err=document.getElementById('err');
+  const u=document.getElementById('u').value.trim(),p=document.getElementById('p').value;
+  if(!u||!p){err.textContent='Username ও Password দিন';return;}
+  btn.disabled=true;btn.textContent='লগিন হচ্ছে...';err.textContent='';
+  try{
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const d=await r.json();
+    if(d.ok){localStorage.setItem('sp_token',d.token);localStorage.setItem('sp_user',d.username);location.href='/';}
+    else err.textContent=d.error||'লগিন ব্যর্থ';
+  }catch(e){err.textContent='Server connect হচ্ছে না';}
+  btn.disabled=false;btn.textContent='লগিন করুন →';
+}
+if(localStorage.getItem('sp_token'))location.href='/';
+</script>
+</body></html>
