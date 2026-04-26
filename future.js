@@ -2,6 +2,14 @@
 const db       = require('./database');
 const telegram = require('./telegram');
 
+// UTC+6 formatter
+function fmt6(unixSec) {
+  const d = new Date((unixSec + 6*3600)*1000);
+  const hh = d.getUTCHours().toString().padStart(2,'0');
+  const mm = d.getUTCMinutes().toString().padStart(2,'0');
+  return `${hh}:${mm}`;
+}
+
 class FutureSignalManager {
   constructor() {
     this.broadcast      = null;
@@ -14,30 +22,29 @@ class FutureSignalManager {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  NEW LIST RECEIVED FROM BOT
+  //  NEW LIST RECEIVED
   // ═══════════════════════════════════════════════════════
   onNewList(signals, fromChatId) {
     const batchId = `batch_${Date.now()}`;
-    const now     = Math.floor(Date.now() / 1000);
+    const now     = Math.floor(Date.now()/1000);
 
-    const expired  = signals.filter(s => s.entryTime <= now);
-    const upcoming = signals.filter(s => s.entryTime > now);
+    // Signals whose entry_time + 60s already passed = expired (result can be checked now)
+    const expired  = signals.filter(s => s.entryTime <= now - 60);
+    // Signals that haven't expired yet
+    const upcoming = signals.filter(s => s.entryTime > now - 60);
 
-    // Save upcoming signals to DB
     if (upcoming.length > 0) {
       db.saveFutureBatch(batchId, upcoming);
       console.log(`[FUTURE] Saved ${upcoming.length} upcoming signals (batch: ${batchId})`);
     }
 
-    // Handle already-expired signals — resolve from candles immediately
     if (expired.length > 0) {
       console.log(`[FUTURE] ${expired.length} signals already expired — resolving from candles`);
-      // Save expired batch separately so they get IDs
       const expBatchId = batchId + '_exp';
       db.saveFutureBatch(expBatchId, expired);
-      // Fetch saved rows so we have real DB ids
       const savedRows = db.getFutureSignalsByBatch(expBatchId);
-      this._resolveExpiredBatch(savedRows);
+      // Resolve after short delay to allow candle data
+      setTimeout(() => this._resolveExpiredBatch(savedRows), 2000);
     }
 
     if (this.broadcast) {
@@ -46,68 +53,63 @@ class FutureSignalManager {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  RESOLVE EXPIRED SIGNALS (from chart candles)
-  //  Published as one combined list message
+  //  RESOLVE EXPIRED BATCH → send combined result list
   // ═══════════════════════════════════════════════════════
   _resolveExpiredBatch(rows) {
     const results = [];
 
     rows.forEach(fs => {
-      // For a 1-minute binary: open = entry candle close, result candle = entry_time + 60
-      const resultTime = fs.entry_time + 60;
-      const candles    = db.getCandles(fs.symbol, 200);
-
-      // Find the entry candle (open price)
-      const entryCandle = candles.find(c => Math.abs(c.time - fs.entry_time) < 65);
-      // Find the result candle (close price, 1 minute later)
+      const resultTime   = fs.entry_time + 60;
+      const candles      = db.getCandles(fs.symbol, 300);
+      const entryCandle  = candles.find(c => Math.abs(c.time - fs.entry_time) < 65);
       const resultCandle = candles.find(c => Math.abs(c.time - resultTime) < 65);
 
       if (entryCandle && resultCandle) {
         const result     = this._evaluate(fs.direction, entryCandle.close, resultCandle.close);
         const closePrice = resultCandle.close;
         db.closeFutureSignal(fs.id, result, closePrice);
+        db.markFutureResultSent(fs.id);
         results.push({ ...fs, result, close_price: closePrice });
         console.log(`[FUTURE] Expired resolved: ${fs.symbol_raw} ${fs.direction} → ${result}`);
       } else {
-        // Candle not found — mark as N/A
+        // Not enough candle data — mark N/A
         db.closeFutureSignal(fs.id, 'N/A', null);
+        db.markFutureResultSent(fs.id);
         results.push({ ...fs, result: 'N/A', close_price: null });
         console.log(`[FUTURE] Expired no candle: ${fs.symbol_raw} (entry: ${fs.entry_time})`);
       }
     });
 
-    // Publish all results as one list
+    // Send all expired results as one list message
     if (results.length > 0) {
       telegram.sendFutureBatchExpired(results);
     }
   }
 
   // ═══════════════════════════════════════════════════════
-  //  TICK — runs every 5 seconds
+  //  TICK — every 5 seconds
   // ═══════════════════════════════════════════════════════
   _tick() {
-    const now    = Math.floor(Date.now() / 1000);
-    const preSec = parseInt(db.getSetting('future_pre_minutes', '1')) * 60;
+    const now    = Math.floor(Date.now()/1000);
+    const preSec = parseInt(db.getSetting('future_pre_minutes','1')) * 60;
 
-    // BUG FIX: fetch ALL unresolved signals (pending + delivered but no result yet)
     const pending = db.getAllUnresolvedFutureSignals();
 
     pending.forEach(fs => {
       const timeToEntry = fs.entry_time - now;
 
-      // ── PRE-SIGNAL (e.g. 1 min before entry) ──
+      // ── PRE-SIGNAL ──
       if (!fs.delivered && timeToEntry <= preSec && timeToEntry > 0) {
         telegram.sendFutureSignalPre(fs);
         db.markFutureDelivered(fs.id);
-        console.log(`[FUTURE] Pre-signal sent: ${fs.symbol_raw} @ ${fs.entry_time}`);
+        console.log(`[FUTURE] Pre-signal sent: ${fs.symbol_raw} @ ${fmt6(fs.entry_time)} (UTC+6)`);
         if (this.broadcast) this.broadcast({ type: 'future_pre', signal: fs });
       }
 
-      // ── RESULT CHECK (60s after entry time) ──
-      // BUG FIX: use entry candle open vs result candle close (not same candle)
+      // ── RESULT CHECK (after entry_time + 60s) ──
       if (timeToEntry <= -60) {
         const resultTime   = fs.entry_time + 60;
-        const candles      = db.getCandles(fs.symbol, 20);
+        const candles      = db.getCandles(fs.symbol, 30);
         const entryCandle  = candles.find(c => Math.abs(c.time - fs.entry_time) < 65);
         const resultCandle = candles.find(c => Math.abs(c.time - resultTime) < 65);
 
@@ -115,29 +117,34 @@ class FutureSignalManager {
           const result     = this._evaluate(fs.direction, entryCandle.close, resultCandle.close);
           const closePrice = resultCandle.close;
           db.closeFutureSignal(fs.id, result, closePrice);
+          db.markFutureResultSent(fs.id);
           telegram.sendFutureResult(fs, result, closePrice);
           console.log(`[FUTURE] Result: ${fs.symbol_raw} ${fs.direction} → ${result}`);
           if (this.broadcast) this.broadcast({ type: 'future_result', id: fs.id, result, closePrice });
         } else {
-          // Candle still not available — will retry next tick
-          console.log(`[FUTURE] Waiting for candle: ${fs.symbol_raw} result_time=${resultTime}`);
+          // Candle not yet available — will retry next tick
+          // But if too much time passed (>5min), mark N/A to avoid stuck
+          if (timeToEntry < -300) {
+            db.closeFutureSignal(fs.id, 'N/A', null);
+            db.markFutureResultSent(fs.id);
+            console.log(`[FUTURE] Timeout N/A: ${fs.symbol_raw}`);
+            if (this.broadcast) this.broadcast({ type: 'future_result', id: fs.id, result: 'N/A', closePrice: null });
+          } else {
+            console.log(`[FUTURE] Waiting for candle: ${fs.symbol_raw} result_time=${resultTime}`);
+          }
         }
       }
     });
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  EVALUATE WIN/LOSS
-  //  open  = entry candle close price
-  //  close = result candle close price (1 min later)
-  // ═══════════════════════════════════════════════════════
   _evaluate(direction, open, close) {
+    if (close === open) return 'TIE';
     if (direction === 'CALL' || direction === 'UP') return close > open ? 'WIN' : 'LOSS';
     return close < open ? 'WIN' : 'LOSS';
   }
 
   onTick(symbol, price, timestamp) {
-    // Reserved for real-time price tracking if needed
+    // Reserved for real-time price tracking
   }
 }
 
