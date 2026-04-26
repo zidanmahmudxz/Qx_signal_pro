@@ -1,11 +1,11 @@
 'use strict';
 const db = require('./database');
 
-// ══════════════════════════════════════════
-//  strategies.js — Quotex Signal Generator
-//  Fractal = Quotex Williams Fractal (exact)
-//  signal_mode: BOTH | SIGNAL_ONLY | MSG_ONLY
-// ══════════════════════════════════════════
+// UTC+6 helper
+function fmtTime6(unixSec) {
+  const d = new Date((unixSec + 6*3600) * 1000);
+  return d.toISOString().slice(11,16); // HH:MM in UTC+6
+}
 
 class StrategyRunner {
   constructor(candles, assetMarket='OTC') {
@@ -31,41 +31,43 @@ class StrategyRunner {
       let res = null;
       try {
         switch(s.key) {
-          case '2g2r':     res = this._2g2r();          break;
-          case '3g2r':     res = this._3g2r();          break;
+          case '2g2r':     res = this._2g2r();           break;
+          case '3g2r':     res = this._3g2r();           break;
           case 'fractal':  res = this._fractal(s.params); break;
           case 'rsi_ob_os':res = this._rsiObOs(s.params); break;
           case 'rsi_cross':res = this._rsiCross(s.params);break;
-          case 'rsi_div':  res = this._rsiDiv(s.params); break;
-          case 'color_seq':res = this._colorSeq();       break;
-          case 'doji_rev': res = this._dojiRev();        break;
-          case 'sr_bounce':res = this._srBounce();       break;
-          case 'momentum': res = this._momentum();       break;
-          case 'engulfing':res = this._engulfing();      break;
-          case 'hammer':   res = this._hammer();         break;
-          case 'pin_bar':  res = this._pinBar();         break;
-          case 'mean_rev': res = this._meanRev(s.params);break;
-          case 'vol_spike':res = this._volSpike();       break;
-          case 'hh_hl':    res = this._hhHl();           break;
+          case 'rsi_div':  res = this._rsiDiv(s.params);  break;
+          case 'color_seq':res = this._colorSeq();        break;
+          case 'doji_rev': res = this._dojiRev();         break;
+          case 'sr_bounce':res = this._srBounce();        break;
+          case 'momentum': res = this._momentum();        break;
+          case 'engulfing':res = this._engulfing();       break;
+          case 'hammer':   res = this._hammer();          break;
+          case 'pin_bar':  res = this._pinBar();          break;
+          case 'mean_rev': res = this._meanRev(s.params); break;
+          case 'vol_spike':res = this._volSpike();        break;
+          case 'hh_hl':    res = this._hhHl();            break;
         }
       } catch(e) {}
 
       if (res) {
         results.push({
-          key       : s.key,
-          name      : s.name,
-          signal    : res.signal,
-          reason    : res.reason,
-          weight    : res.weight || 1.0,
-          signalMode: s.signal_mode || 'BOTH',
-          customMsg : s.custom_strat_msg || '',
+          key           : s.key,
+          name          : s.name,
+          signal        : res.signal,
+          reason        : res.reason,
+          weight        : res.weight || 1.0,
+          signal_mode   : s.signal_mode || 'BOTH',
+          custom_strat_msg : s.custom_strat_msg || '',
+          fractalTime   : res.fractalTime,
+          fractalLow    : res.fractalLow,
+          fractalHigh   : res.fractalHigh,
         });
       }
     }
 
-    // Separate into signal-eligible and msg-only
-    const forSignal = results.filter(r => r.signalMode === 'BOTH' || r.signalMode === 'SIGNAL_ONLY');
-    const forMsg    = results; // all matched strategies get custom msg
+    // Only strategies with signal_mode BOTH or SIGNAL_ONLY go into signal calculation
+    const forSignal = results.filter(r => r.signal_mode === 'BOTH' || r.signal_mode === 'SIGNAL_ONLY');
 
     let callW=0, putW=0;
     const callStrats=[], putStrats=[];
@@ -82,10 +84,9 @@ class StrategyRunner {
       lean, strength, callW:+callW.toFixed(2), putW:+putW.toFixed(2),
       callStrats, putStrats,
       allMatched: lean==='CALL'?callStrats:putStrats,
-      allResults: results,   // all matched (for custom strategy msgs)
-      forMsg,                // strategies with custom msg to fire
+      allResults: results,
       context: this._ctx(),
-      fractals: this._getFractalPoints(), // for chart rendering
+      fractals: this._getFractalPoints(),
       last30: this.c.slice(-30).map(c=>({
         t:c.time, o:+c.open.toFixed(5), h:+c.high.toFixed(5),
         l:+c.low.toFixed(5), c:+c.close.toFixed(5), v:c.volume||0,
@@ -133,74 +134,100 @@ class StrategyRunner {
     return r;
   }
 
-  // ══════════════════════════════════
-  //  QUOTEX FRACTAL (exact implementation)
-  // ══════════════════════════════════
-  // Williams Fractal period=2 means:
-  // Bearish Fractal (UP arrow): candle[i].HIGH > candle[i-2].HIGH &&
-  //                              candle[i].HIGH > candle[i-1].HIGH &&
-  //                              candle[i].HIGH > candle[i+1].HIGH &&
-  //                              candle[i].HIGH > candle[i+2].HIGH
-  // Bullish Fractal (DOWN arrow): candle[i].LOW < all 4 surrounding lows
+  // ══════════════════════════════════════════════════════
+  //  QUOTEX FRACTAL — EXACT IMPLEMENTATION
   //
-  // Quotex shows arrow at candle[i] but it's confirmed 2 candles LATER
-  // So: we detect fractal at position n-3 (confirmed by n-2, n-1)
+  //  Quotex Williams Fractal (period=2):
+  //  Bearish Fractal (UP arrow above candle):
+  //    candle[i].HIGH is highest among candle[i-2..i+2]
+  //  Bullish Fractal (DOWN arrow below candle):
+  //    candle[i].LOW is lowest among candle[i-2..i+2]
   //
-  // Strategy: DOWN trend + Bullish Fractal (DOWN arrow) → PUT signal
-  // The candle with fractal = signal candle, next 5 candles expected DOWN
-
+  //  Arrow appears on candle[i] but is CONFIRMED only after
+  //  candle[i+2] closes. So we detect at position n-3
+  //  (confirmed by the 2 candles that came after).
+  //
+  //  Quotex Strategy:
+  //  DOWN trend + Bullish Fractal (DOWN arrow) just confirmed
+  //  → Next 5 candles expected DOWN → PUT signal immediately
+  // ══════════════════════════════════════════════════════
   _fractal(params={}) {
-    const period = parseInt(params.period)||2;
+    const period = parseInt(params.period) || 2;
     const n = this.n;
-    // Need at least 2*period+1 candles to confirm fractal
-    if (n < period*2+3) return null;
-    if (!this._isDownTrend()) return null;
+    // Need at least 2*period+1 candles confirmed
+    if (n < period*2 + 3) return null;
 
-    // Check bullish fractal (DOWN arrow) at position: n-1-period
-    // (confirmed by period candles after it)
+    // The fractal candle index = n-1-period (confirmed by period candles after)
     const mid = n - 1 - period;
     if (mid < period) return null;
 
-    const midLow = this.low[mid];
-    let isBullFractal = true;
+    const midLow  = this.low[mid];
+    const midHigh = this.hgh[mid];
 
-    // Check period candles on each side
+    // Check Bullish Fractal (DOWN arrow) — low is lowest in window
+    let isBullFractal = true;
     for (let i = 1; i <= period; i++) {
-      if (midLow >= this.low[mid - i]) { isBullFractal = false; break; }
-      if (midLow >= this.low[mid + i]) { isBullFractal = false; break; }
+      if (midLow >= this.low[mid - i] || midLow >= this.low[mid + i]) {
+        isBullFractal = false; break;
+      }
     }
 
-    if (isBullFractal) {
-      const candleTime = new Date(this.c[mid].time*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    // Check Bearish Fractal (UP arrow) — high is highest in window
+    let isBearFractal = true;
+    for (let i = 1; i <= period; i++) {
+      if (midHigh <= this.hgh[mid - i] || midHigh <= this.hgh[mid + i]) {
+        isBearFractal = false; break;
+      }
+    }
+
+    const candleTime = fmtTime6(this.c[mid].time);
+
+    if (isBullFractal && this._isDownTrend()) {
       return {
-        signal : 'PUT',
-        reason : `Bullish Fractal (↓ arrow) at ${candleTime} in downtrend → PUT`,
-        weight : 3.5,
+        signal     : 'PUT',
+        reason     : `Quotex Fractal ↓ arrow at ${candleTime} (UTC+6) in downtrend → PUT`,
+        weight     : 3.5,
         fractalTime: this.c[mid].time,
         fractalLow : midLow,
       };
     }
+
+    if (isBearFractal && this._isUpTrend()) {
+      return {
+        signal     : 'CALL',
+        reason     : `Quotex Fractal ↑ arrow at ${candleTime} (UTC+6) in uptrend → CALL`,
+        weight     : 3.5,
+        fractalTime: this.c[mid].time,
+        fractalHigh: midHigh,
+      };
+    }
+
     return null;
   }
 
-  // Get all fractal points for chart rendering
+  // Get ALL fractal points for chart rendering (matches Quotex exactly)
   _getFractalPoints() {
     const period = 2;
     const points = { up:[], down:[] };
     if (this.n < period*2+1) return points;
 
+    // Only show confirmed fractals (need period candles after)
     for (let mid = period; mid < this.n - period; mid++) {
-      // Bearish fractal (UP arrow) — high is highest
+      // Bearish fractal (UP arrow above) — high is highest
       let isHigh = true;
-      for (let i=1;i<=period;i++) {
-        if(this.hgh[mid]<=this.hgh[mid-i]||this.hgh[mid]<=this.hgh[mid+i]){isHigh=false;break;}
+      for (let i=1; i<=period; i++) {
+        if (this.hgh[mid] <= this.hgh[mid-i] || this.hgh[mid] <= this.hgh[mid+i]) {
+          isHigh=false; break;
+        }
       }
       if (isHigh) points.up.push({ time:this.c[mid].time, value:this.hgh[mid] });
 
-      // Bullish fractal (DOWN arrow) — low is lowest
+      // Bullish fractal (DOWN arrow below) — low is lowest
       let isLow = true;
-      for (let i=1;i<=period;i++) {
-        if(this.low[mid]>=this.low[mid-i]||this.low[mid]>=this.low[mid+i]){isLow=false;break;}
+      for (let i=1; i<=period; i++) {
+        if (this.low[mid] >= this.low[mid-i] || this.low[mid] >= this.low[mid+i]) {
+          isLow=false; break;
+        }
       }
       if (isLow) points.down.push({ time:this.c[mid].time, value:this.low[mid] });
     }
@@ -249,10 +276,6 @@ class StrategyRunner {
     if(pM2>pM1&&rM2<rM1)return{signal:'PUT',reason:'Bearish RSI divergence→PUT',weight:2.5};
     return null;
   }
-
-  // ══════════════════════════════════
-  //  EXISTING STRATEGIES
-  // ══════════════════════════════════
   _colorSeq(){
     if(this.n<4)return null;
     const c=this.c,n=this.n;
