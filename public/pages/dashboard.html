@@ -54,6 +54,8 @@ body{overflow:hidden}
 /* Stats */
 #statbar{flex-shrink:0;display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--b2);padding:7px 10px;gap:4px}
 .stit{text-align:center}.stit .sv{font-size:12px;font-weight:600;font-family:var(--mono)}.stit .sl{font-size:8px;color:var(--mu);text-transform:uppercase;margin-top:1px}
+/* Fractal legend */
+#fractal-legend{position:absolute;bottom:8px;right:8px;z-index:10;background:rgba(11,14,23,.85);border:1px solid var(--b2);border-radius:5px;padding:5px 9px;font-size:9px;font-family:var(--mono);pointer-events:none;line-height:1.9}
 </style>
 </head><body>
 <nav id="nav">
@@ -99,6 +101,10 @@ body{overflow:hidden}
       <div id="lwc"></div>
       <div id="tip"></div>
       <div id="wait"><div>⏳ Candle জমছে...</div><div class="wn" id="wcnt">0</div><div style="font-size:10px;color:var(--mu)">১৫+ candle দরকার</div></div>
+      <div id="fractal-legend">
+        <span style="color:#ef5350">▼</span> Bearish Fractal (PUT)&nbsp;&nbsp;
+        <span style="color:#26a69a">▲</span> Bullish Fractal (CALL)
+      </div>
     </div>
   </div>
   <div id="right">
@@ -124,211 +130,406 @@ body{overflow:hidden}
 <div id="toast-wrap"></div>
 <script src="/js/shared.js"></script>
 <script>
-let chart,cSer,vSer,activeSym=null,allAssets=[],allSigs=[],cm={},openPx={},ticks=0,ws,wsT;
-const TF=60;
+// UTC+6 offset in seconds
+const UTC6_OFFSET = 6 * 3600;
+const TF = 60;
 
-function initChart(){
-  const w=document.getElementById('cwrap');
-  chart=LightweightCharts.createChart(document.getElementById('lwc'),{
-    width:w.clientWidth,height:w.clientHeight,
-    layout:{background:{type:'solid',color:'#0b0e17'},textColor:'#565d75',fontSize:11,fontFamily:"'Courier New',monospace"},
-    grid:{vertLines:{color:'rgba(255,255,255,0.04)'},horzLines:{color:'rgba(255,255,255,0.04)'}},
-    crosshair:{mode:LightweightCharts.CrosshairMode.Normal,vertLine:{color:'rgba(255,255,255,0.15)',labelBackgroundColor:'#1c2030'},horzLine:{color:'rgba(255,255,255,0.15)',labelBackgroundColor:'#1c2030'}},
-    rightPriceScale:{borderVisible:false,scaleMargins:{top:0.06,bottom:0.06}},
-    timeScale:{
-  borderVisible:false,
-  timeVisible:true,
-  secondsVisible:false,
-  tickMarkFormatter:(time)=>{
-    const d=new Date(time*1000);
-    return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
-  },
-},
-  });
-  cSer=chart.addCandlestickSeries({upColor:'#26a69a',downColor:'#ef5350',borderUpColor:'#26a69a',borderDownColor:'#ef5350',wickUpColor:'#26a69a',wickDownColor:'#ef5350'});
+let chart, cSer, fractalUpSer, fractalDnSer;
+let activeSym = null, allAssets = [], allSigs = [], cm = {}, openPx = {}, ws, wsT;
 
-  chart.subscribeCrosshairMove(p=>{
-    const tip=document.getElementById('tip');
-    if(!p||!p.time){tip.style.display='none';return;}
-    const c=cm[activeSym]?.[p.time];if(!c){tip.style.display='none';return;}
-    const chg=((c.close-c.open)/c.open*100),col=c.close>=c.open?'#26a69a':'#ef5350';
-    const d=new Date(p.time*1000);
-// UTC offset fix — local time দেখাবে
-    tip.style.display='block';
-    tip.innerHTML=`<span style="color:#565d75">${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}</span><br>O <b>${c.open.toFixed(5)}</b> H <b style="color:#26a69a">${c.high.toFixed(5)}</b> L <b style="color:#ef5350">${c.low.toFixed(5)}</b> C <b style="color:${col}">${c.close.toFixed(5)}</b>`;
+// ── INIT CHART ──
+function initChart() {
+  const w = document.getElementById('cwrap');
+
+  chart = LightweightCharts.createChart(document.getElementById('lwc'), {
+    width: w.clientWidth,
+    height: w.clientHeight,
+    layout: {
+      background: { type: 'solid', color: '#0b0e17' },
+      textColor: '#565d75',
+      fontSize: 11,
+      fontFamily: "'Courier New',monospace"
+    },
+    grid: {
+      vertLines: { color: 'rgba(255,255,255,0.04)' },
+      horzLines: { color: 'rgba(255,255,255,0.04)' }
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: { color: 'rgba(255,255,255,0.15)', labelBackgroundColor: '#1c2030' },
+      horzLine: { color: 'rgba(255,255,255,0.15)', labelBackgroundColor: '#1c2030' }
+    },
+    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.08 } },
+    timeScale: {
+      borderVisible: false,
+      timeVisible: true,
+      secondsVisible: false,
+      // UTC+6 offset so chart shows local Bangladesh time
+      tickMarkFormatter: (unixSec) => {
+        const d = new Date((unixSec + UTC6_OFFSET) * 1000);
+        return d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0');
+      },
+    },
+    localization: {
+      timeFormatter: (unixSec) => {
+        const d = new Date((unixSec + UTC6_OFFSET) * 1000);
+        const hh = d.getUTCHours().toString().padStart(2,'0');
+        const mm = d.getUTCMinutes().toString().padStart(2,'0');
+        const ss = d.getUTCSeconds().toString().padStart(2,'0');
+        return `${hh}:${mm}:${ss} (UTC+6)`;
+      }
+    }
   });
-  new ResizeObserver(()=>{if(chart)chart.applyOptions({width:w.clientWidth,height:w.clientHeight});}).observe(w);
+
+  // Candlestick series
+  cSer = chart.addCandlestickSeries({
+    upColor: '#26a69a', downColor: '#ef5350',
+    borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+  });
+
+  // ── Fractal series — Bearish (UP arrow ▼ above candle = PUT signal) ──
+  fractalUpSer = chart.addLineSeries({
+    color: 'transparent',
+    lineWidth: 0,
+    lastValueVisible: false,
+    priceLineVisible: false,
+  });
+  // Marker style for bearish fractal (above candle, pointing down)
+  // ── Fractal series — Bullish (DOWN arrow ▲ below candle = CALL signal) ──
+  fractalDnSer = chart.addLineSeries({
+    color: 'transparent',
+    lineWidth: 0,
+    lastValueVisible: false,
+    priceLineVisible: false,
+  });
+
+  // Crosshair tooltip
+  chart.subscribeCrosshairMove(p => {
+    const tip = document.getElementById('tip');
+    if (!p || !p.time) { tip.style.display = 'none'; return; }
+    const c = cm[activeSym]?.[p.time];
+    if (!c) { tip.style.display = 'none'; return; }
+    const col = c.close >= c.open ? '#26a69a' : '#ef5350';
+    const d = new Date((p.time + UTC6_OFFSET) * 1000);
+    const hh = d.getUTCHours().toString().padStart(2,'0');
+    const mm = d.getUTCMinutes().toString().padStart(2,'0');
+    tip.style.display = 'block';
+    tip.innerHTML = `<span style="color:#565d75">${hh}:${mm} (UTC+6)</span><br>O <b>${c.open.toFixed(5)}</b> H <b style="color:#26a69a">${c.high.toFixed(5)}</b> L <b style="color:#ef5350">${c.low.toFixed(5)}</b> C <b style="color:${col}">${c.close.toFixed(5)}</b>`;
+  });
+
+  new ResizeObserver(() => {
+    if (chart) chart.applyOptions({ width: w.clientWidth, height: w.clientHeight });
+  }).observe(w);
 }
 
-function onTick(sym,price,timestamp,volume){
-  ticks++;
-  const ts=Math.floor(timestamp/TF)*TF;
-  if(!cm[sym])cm[sym]={};
-  if(!openPx[sym])openPx[sym]=price;
-  const c=cm[sym];
-  if(!c[ts])c[ts]={time:ts,open:price,high:price,low:price,close:price,volume:0,_sv:volume};
-  else{if(price>c[ts].high)c[ts].high=price;if(price<c[ts].low)c[ts].low=price;c[ts].close=price;c[ts].volume=Math.max(0,volume-c[ts]._sv);}
-  const a=allAssets.find(x=>x.symbol===sym);if(a){a.lastPrice=price;a.chg=((price-openPx[sym])/openPx[sym]*100);}
+// ── TICK ──
+function onTick(sym, price, timestamp, volume) {
+  const ts = Math.floor(timestamp / TF) * TF;
+  if (!cm[sym]) cm[sym] = {};
+  if (!openPx[sym]) openPx[sym] = price;
+
+  const c = cm[sym];
+  if (!c[ts]) c[ts] = { time: ts, open: price, high: price, low: price, close: price, volume: 0, _sv: volume };
+  else {
+    if (price > c[ts].high) c[ts].high = price;
+    if (price < c[ts].low) c[ts].low = price;
+    c[ts].close = price;
+    c[ts].volume = Math.max(0, volume - c[ts]._sv);
+  }
+
+  const a = allAssets.find(x => x.symbol === sym);
+  if (a) { a.lastPrice = price; a.chg = ((price - openPx[sym]) / openPx[sym] * 100); }
   updateARow(sym);
-  if(sym===activeSym){redraw();updateChdr(sym,price);}
+  if (sym === activeSym) { redraw(); updateChdr(sym, price); }
 }
 
-function loadCandlesDB(sym,rows){
-  if(!cm[sym])cm[sym]={};
-  rows.forEach(r=>{cm[sym][r.time]={time:r.time,open:r.open,high:r.high,low:r.low,close:r.close,volume:r.volume||0,_sv:0};});
-  if(rows.length&&!openPx[sym])openPx[sym]=rows[0].open;
+function loadCandlesDB(sym, rows) {
+  if (!cm[sym]) cm[sym] = {};
+  rows.forEach(r => {
+    cm[sym][r.time] = { time: r.time, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume || 0, _sv: 0 };
+  });
+  if (rows.length && !openPx[sym]) openPx[sym] = rows[0].open;
 }
 
-function redraw(){
-  if(!activeSym||!chart)return;
-  const sorted=Object.values(cm[activeSym]||{}).sort((a,b)=>a.time-b.time);
-  const n=sorted.length;
-  document.getElementById('ccount').textContent=n+' candles';
-  document.getElementById('wcnt').textContent=n;
-  document.getElementById('wait').style.display=n<5?'flex':'none';
-  if(!n)return;
-  cSer.setData(sorted.map(c=>({time:c.time,open:c.open,high:c.high,low:c.low,close:c.close})));
-  const last=sorted[n-1];
-  document.getElementById('co').textContent=last.open.toFixed(5);
-  document.getElementById('ch').textContent=last.high.toFixed(5);
-  document.getElementById('cl').textContent=last.low.toFixed(5);
-  document.getElementById('cc').textContent=last.close.toFixed(5);
+// ── REDRAW CHART + FRACTALS ──
+function redraw() {
+  if (!activeSym || !chart) return;
+  const sorted = Object.values(cm[activeSym] || {}).sort((a, b) => a.time - b.time);
+  const n = sorted.length;
+
+  document.getElementById('ccount').textContent = n + ' candles';
+  document.getElementById('wcnt').textContent = n;
+  document.getElementById('wait').style.display = n < 5 ? 'flex' : 'none';
+  if (!n) return;
+
+  cSer.setData(sorted.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+
+  const last = sorted[n - 1];
+  document.getElementById('co').textContent = last.open.toFixed(5);
+  document.getElementById('ch').textContent = last.high.toFixed(5);
+  document.getElementById('cl').textContent = last.low.toFixed(5);
+  document.getElementById('cc').textContent = last.close.toFixed(5);
 }
 
-function updateChdr(sym,price){
-  const a=allAssets.find(x=>x.symbol===sym);
-  document.getElementById('asym').textContent=a?`${a.flag} ${a.name}`:sym;
-  const pe=document.getElementById('aprice');
-  pe.className=price>(pe._last||price)?'fu':price<(pe._last||price)?'fd':'';
-  pe._last=price;pe.textContent=price.toFixed(5);
-  setTimeout(()=>pe.className='',300);
-  const chg=openPx[sym]?((price-openPx[sym])/openPx[sym]*100):0;
-  const ce=document.getElementById('achg');
-  ce.textContent=(chg>=0?'+':'')+chg.toFixed(3)+'%';ce.className=chg>=0?'up':'dn';
+// ── DRAW FRACTAL MARKERS ──
+// Quotex Fractal (period=2): confirmed when 2 candles appear after the fractal candle
+// Bearish fractal: high[mid] > high of all 4 neighbors → ▼ above (PUT)
+// Bullish fractal: low[mid] < low of all 4 neighbors → ▲ below (CALL)
+function drawFractals(fractals) {
+  if (!fractals || !fractalUpSer || !fractalDnSer) return;
+
+  // Bearish fractal markers (▼ above candle = PUT signal)
+  const upMarkers = (fractals.up || []).map(f => ({
+    time: f.time,
+    position: 'aboveBar',
+    color: '#ef5350',
+    shape: 'arrowDown',
+    text: '▼',
+    size: 1,
+  }));
+
+  // Bullish fractal markers (▲ below candle = CALL signal)
+  const dnMarkers = (fractals.down || []).map(f => ({
+    time: f.time,
+    position: 'belowBar',
+    color: '#26a69a',
+    shape: 'arrowUp',
+    text: '▲',
+    size: 1,
+  }));
+
+  // Apply markers to candlestick series
+  if (cSer) {
+    cSer.setMarkers([...upMarkers, ...dnMarkers].sort((a, b) => a.time - b.time));
+  }
 }
 
-function drawAssets(){
-  const live=allAssets.filter(a=>a.live);
-  const lv=live.filter(a=>a.connected).length;
-  document.getElementById('lvcnt').textContent=lv+' Live';
-  const box=document.getElementById('asset-list');box.innerHTML='';
-  live.forEach(a=>{
-    const sc=a.strategy?a.strategy.strength:0,sc2=sc>=70?'h':sc>=45?'m':'';
-    const row=document.createElement('div');
-    row.className='arow'+(a.symbol===activeSym?' act':'');row.id='ar-'+a.symbol;
-    row.innerHTML=
-      `<span class="aflag">${a.flag||'🔵'}</span>`+
-      `<div><div class="anm">${a.name}</div><div class="apr">${a.lastPrice?a.lastPrice.toFixed(5):'—'}</div></div>`+
-      `<div><div class="asc ${sc2}">${a.strategy?.lean||'—'}</div>`+
-      `<div class="acn ${a.connected?'on':'off'}">${a.signal_on?'<span class="a-sig-dot on"></span>':''}${a.connected?'Live':'Off'}</div></div>`;
-    row.onclick=()=>selectAsset(a.symbol);
+function updateChdr(sym, price) {
+  const a = allAssets.find(x => x.symbol === sym);
+  document.getElementById('asym').textContent = a ? `${a.flag} ${a.name}` : sym;
+  const pe = document.getElementById('aprice');
+  pe.className = price > (pe._last || price) ? 'fu' : price < (pe._last || price) ? 'fd' : '';
+  pe._last = price; pe.textContent = price.toFixed(5);
+  setTimeout(() => pe.className = '', 300);
+  const chg = openPx[sym] ? ((price - openPx[sym]) / openPx[sym] * 100) : 0;
+  const ce = document.getElementById('achg');
+  ce.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(3) + '%';
+  ce.className = chg >= 0 ? 'up' : 'dn';
+}
+
+function drawAssets() {
+  const live = allAssets.filter(a => a.live);
+  const lv = live.filter(a => a.connected).length;
+  document.getElementById('lvcnt').textContent = lv + ' Live';
+  const box = document.getElementById('asset-list'); box.innerHTML = '';
+  live.forEach(a => {
+    const sc = a.strategy ? a.strategy.strength : 0;
+    const sc2 = sc >= 70 ? 'h' : sc >= 45 ? 'm' : '';
+    const row = document.createElement('div');
+    row.className = 'arow' + (a.symbol === activeSym ? ' act' : ''); row.id = 'ar-' + a.symbol;
+    row.innerHTML =
+      `<span class="aflag">${a.flag || '🔵'}</span>` +
+      `<div><div class="anm">${a.name}</div><div class="apr">${a.lastPrice ? a.lastPrice.toFixed(5) : '—'}</div></div>` +
+      `<div><div class="asc ${sc2}">${a.strategy?.lean || '—'}</div>` +
+      `<div class="acn ${a.connected ? 'on' : 'off'}">${a.signal_on ? '<span class="a-sig-dot on"></span>' : ''}${a.connected ? 'Live' : 'Off'}</div></div>`;
+    row.onclick = () => selectAsset(a.symbol);
     box.appendChild(row);
   });
 }
 
-function updateARow(sym){
-  const el=document.getElementById('ar-'+sym),a=allAssets.find(x=>x.symbol===sym);
-  if(!el||!a)return;
-  el.querySelector('.apr').textContent=a.lastPrice?a.lastPrice.toFixed(5):'—';
-  if(a.strategy){const sc=a.strategy.strength,sc2=sc>=70?'h':sc>=45?'m':'';el.querySelector('.asc').textContent=a.strategy.lean||'—';el.querySelector('.asc').className='asc '+sc2;}
+function updateARow(sym) {
+  const el = document.getElementById('ar-' + sym), a = allAssets.find(x => x.symbol === sym);
+  if (!el || !a) return;
+  el.querySelector('.apr').textContent = a.lastPrice ? a.lastPrice.toFixed(5) : '—';
+  if (a.strategy) {
+    const sc = a.strategy.strength, sc2 = sc >= 70 ? 'h' : sc >= 45 ? 'm' : '';
+    el.querySelector('.asc').textContent = a.strategy.lean || '—';
+    el.querySelector('.asc').className = 'asc ' + sc2;
+  }
 }
 
-async function selectAsset(sym){
-  activeSym=sym;
-  document.querySelectorAll('.arow').forEach(r=>r.classList.remove('act'));
-  const el=document.getElementById('ar-'+sym);if(el)el.classList.add('act');
-  if(!cm[sym]||Object.keys(cm[sym]).length<3){
-    try{const r=await api('/api/candles?symbol='+sym);loadCandlesDB(sym,r);}catch(e){}
+async function selectAsset(sym) {
+  activeSym = sym;
+  document.querySelectorAll('.arow').forEach(r => r.classList.remove('act'));
+  const el = document.getElementById('ar-' + sym); if (el) el.classList.add('act');
+  if (!cm[sym] || Object.keys(cm[sym]).length < 3) {
+    try { const r = await api('/api/candles?symbol=' + sym); loadCandlesDB(sym, r); } catch(e) {}
   }
   redraw();
-  const a=allAssets.find(x=>x.symbol===sym);
-  if(a&&a.lastPrice)updateChdr(sym,a.lastPrice);
-  if(a&&a.strategy)updateStrategy(a.strategy);
+  const a = allAssets.find(x => x.symbol === sym);
+  if (a && a.lastPrice) updateChdr(sym, a.lastPrice);
+  if (a && a.strategy) {
+    updateStrategy(a.strategy);
+    if (a.strategy.fractals) drawFractals(a.strategy.fractals);
+  }
 }
 
-function updateStrategy(s){
-  if(!s)return;
-  const cw=s.callW||0,pw=s.putW||0,tot=cw+pw||1;
-  document.getElementById('sfc').style.width=(cw/tot*100)+'%';
-  document.getElementById('sfp').style.width=(pw/tot*100)+'%';
-  document.getElementById('snc').textContent=cw.toFixed(1);
-  document.getElementById('snp').textContent=pw.toFixed(1);
-  const lb=document.getElementById('lean-b');
-  lb.textContent=(s.lean||'—')+' '+(s.strength||0)+'%';
-  lb.className='badge '+(s.lean==='CALL'?'up':s.lean==='PUT'?'dn':'');
-  const sl=document.getElementById('stlist');sl.innerHTML='';
-  (s.strategies||[]).slice(0,5).forEach(st=>{
-    const d=document.createElement('div');d.className='stitem';
-    d.innerHTML=`<span style="color:${st.signal==='CALL'?'#26a69a':'#ef5350'};font-weight:700;font-size:9px">${st.signal}</span><span>${st.name}</span>`;
+function updateStrategy(s) {
+  if (!s) return;
+  const cw = s.callW || 0, pw = s.putW || 0, tot = cw + pw || 1;
+  document.getElementById('sfc').style.width = (cw / tot * 100) + '%';
+  document.getElementById('sfp').style.width = (pw / tot * 100) + '%';
+  document.getElementById('snc').textContent = cw.toFixed(1);
+  document.getElementById('snp').textContent = pw.toFixed(1);
+  const lb = document.getElementById('lean-b');
+  lb.textContent = (s.lean || '—') + ' ' + (s.strength || 0) + '%';
+  lb.className = 'badge ' + (s.lean === 'CALL' ? 'up' : s.lean === 'PUT' ? 'dn' : '');
+  const sl = document.getElementById('stlist'); sl.innerHTML = '';
+  (s.strategies || []).slice(0, 5).forEach(st => {
+    const d = document.createElement('div'); d.className = 'stitem';
+    d.innerHTML = `<span style="color:${st.signal === 'CALL' ? '#26a69a' : '#ef5350'};font-weight:700;font-size:9px">${st.signal}</span><span>${st.name}</span>`;
     sl.appendChild(d);
   });
 }
 
-function mkSigCard(s){
-  const cls=s.direction,arr=cls==='CALL'?'▲':'▼';
-  const et=new Date((s.entry_time||s.entryTime)*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  const xt=new Date((s.expiry_time||s.expiryTime)*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  const result=s.result||'active';
-  const strats=Array.isArray(s.matched_strategies)?s.matched_strategies.slice(0,3).map(x=>x.name||x).join(', '):'';
-  const d=document.createElement('div');
-  d.className=`sig-card ${cls}`;d.id='sc-'+(s.uid||s.id);
-  d.innerHTML=
-    `<div class="sig-head ${cls}"><span style="font-size:13px">${s.flag||''}</span><span class="sig-dir ${cls}">${arr} ${cls}</span><span style="margin-left:auto;font-size:10px">${s.name}</span><span class="rb ${result}" style="margin-left:6px">${result}</span></div>`+
-    `<div class="sig-body"><div class="sig-grid">`+
-    `<div class="sf"><span class="sfl">Entry</span><span class="sfv ${cls.toLowerCase()}">${et}</span></div>`+
-    `<div class="sf"><span class="sfl">Expiry</span><span class="sfv">${xt}</span></div>`+
-    `<div class="sf"><span class="sfl">AI Conf</span><span class="sfv">${s.confidence||0}%</span></div>`+
-    `</div><div style="font-size:9px;color:var(--mu2)">${strats}</div>`+
-    `${s.custom_msg||s.customMsg?`<div style="font-size:9px;color:var(--gold);margin-top:2px">💬 ${s.custom_msg||s.customMsg}</div>`:''}`+
+function mkSigCard(s) {
+  const cls = s.direction, arr = cls === 'CALL' ? '▲' : '▼';
+  // UTC+6 time display
+  const entryTs = (s.entry_time || s.entryTime);
+  const expiryTs = (s.expiry_time || s.expiryTime);
+  const et = fmtTime6(entryTs);
+  const xt = fmtTime6(expiryTs);
+  const result = s.result || 'active';
+  const strats = Array.isArray(s.matched_strategies) ? s.matched_strategies.slice(0, 3).map(x => x.name || x).join(', ') : '';
+  const d = document.createElement('div');
+  d.className = `sig-card ${cls}`; d.id = 'sc-' + (s.uid || s.id);
+  d.innerHTML =
+    `<div class="sig-head ${cls}"><span style="font-size:13px">${s.flag || ''}</span><span class="sig-dir ${cls}">${arr} ${cls}</span><span style="margin-left:auto;font-size:10px">${s.name}</span><span class="rb ${result}" style="margin-left:6px">${result}</span></div>` +
+    `<div class="sig-body"><div class="sig-grid">` +
+    `<div class="sf"><span class="sfl">Entry</span><span class="sfv ${cls.toLowerCase()}">${et}</span></div>` +
+    `<div class="sf"><span class="sfl">Expiry</span><span class="sfv">${xt}</span></div>` +
+    `<div class="sf"><span class="sfl">AI Conf</span><span class="sfv">${s.confidence || 0}%</span></div>` +
+    `</div><div style="font-size:9px;color:var(--mu2)">${strats}</div>` +
+    `${s.custom_msg || s.customMsg ? `<div style="font-size:9px;color:var(--gold);margin-top:2px">💬 ${s.custom_msg || s.customMsg}</div>` : ''}` +
     `</div>`;
   return d;
 }
 
-function drawSigs(){
-  const active=allSigs.filter(s=>(s.status==='active'||!s.result)).slice(0,8);
-  document.getElementById('sigcnt').textContent=active.length;
-  const box=document.getElementById('livesigs');
-  if(!active.length){box.innerHTML='<div class="nodata">⏳ সিগন্যালের অপেক্ষায়...</div>';return;}
-  box.innerHTML='';active.forEach(s=>box.appendChild(mkSigCard(s)));
+// UTC+6 time formatter for signal cards
+function fmtTime6(unixSec) {
+  if (!unixSec) return '—';
+  const d = new Date((unixSec + UTC6_OFFSET) * 1000);
+  const hh = d.getUTCHours().toString().padStart(2,'0');
+  const mm = d.getUTCMinutes().toString().padStart(2,'0');
+  const ss = d.getUTCSeconds().toString().padStart(2,'0');
+  return `${hh}:${mm}:${ss}`;
 }
 
-function updateStats(s){
-  document.getElementById('st-t').textContent=s.total||0;
-  document.getElementById('st-w').textContent=s.wins||0;
-  document.getElementById('st-l').textContent=s.losses||0;
-  document.getElementById('st-r').textContent=(s.winRate||'0.0')+'%';
+function drawSigs() {
+  const active = allSigs.filter(s => (s.status === 'active' || !s.result)).slice(0, 8);
+  document.getElementById('sigcnt').textContent = active.length;
+  const box = document.getElementById('livesigs');
+  if (!active.length) { box.innerHTML = '<div class="nodata">⏳ সিগন্যালের অপেক্ষায়...</div>'; return; }
+  box.innerHTML = ''; active.forEach(s => box.appendChild(mkSigCard(s)));
 }
 
-// WS
-function connectWS(){
-  ws=new WebSocket(`ws://localhost:3000?token=${TOKEN}`);
-  ws.onopen=()=>{document.getElementById('wsdot').style.background='#26a69a';document.getElementById('wslbl').textContent='Live';};
-  ws.onmessage=e=>{try{handle(JSON.parse(e.data));}catch(err){}};
-  ws.onclose=()=>{document.getElementById('wsdot').style.background='#ef5350';document.getElementById('wslbl').textContent='Reconnecting';clearTimeout(wsT);wsT=setTimeout(connectWS,3000);};
+function updateStats(s) {
+  document.getElementById('st-t').textContent = s.total || 0;
+  document.getElementById('st-w').textContent = s.wins || 0;
+  document.getElementById('st-l').textContent = s.losses || 0;
+  document.getElementById('st-r').textContent = (s.winRate || '0.0') + '%';
 }
 
-function handle(m){
-  switch(m.type){
+// ── UTC+6 NAV CLOCK ──
+setInterval(() => {
+  const el = document.getElementById('nav-clk');
+  if (el) {
+    const now = Math.floor(Date.now() / 1000);
+    el.textContent = fmtTime6(now) + ' (UTC+6)';
+  }
+}, 1000);
+
+// ── WEBSOCKET ──
+function connectWS() {
+  ws = new WebSocket(`ws://${location.host}?token=${TOKEN}`);
+  ws.onopen = () => {
+    document.getElementById('wsdot').style.background = '#26a69a';
+    document.getElementById('wslbl').textContent = 'Live';
+  };
+  ws.onmessage = e => { try { handle(JSON.parse(e.data)); } catch(err) {} };
+  ws.onclose = () => {
+    document.getElementById('wsdot').style.background = '#ef5350';
+    document.getElementById('wslbl').textContent = 'Reconnecting';
+    clearTimeout(wsT); wsT = setTimeout(connectWS, 3000);
+  };
+}
+
+function handle(m) {
+  switch(m.type) {
     case 'init':
-      allAssets=m.state.assets||[];allSigs=m.state.signals||[];
-      updateKillBtns(m.state.running,m.state.aiEnabled);
-      allAssets.filter(a=>a.live).forEach(a=>{
-        api('/api/candles?symbol='+a.symbol).then(r=>{loadCandlesDB(a.symbol,r);if(a.symbol===activeSym)redraw();}).catch(()=>{});
+      allAssets = m.state.assets || []; allSigs = m.state.signals || [];
+      updateKillBtns(m.state.running, m.state.aiEnabled);
+      allAssets.filter(a => a.live).forEach(a => {
+        api('/api/candles?symbol=' + a.symbol).then(r => {
+          loadCandlesDB(a.symbol, r);
+          if (a.symbol === activeSym) redraw();
+        }).catch(() => {});
       });
-      drawAssets();drawSigs();updateStats(m.state.stats||{});
-      const first=allAssets.find(a=>a.live);if(first&&!activeSym)selectAsset(first.symbol);
+      drawAssets(); drawSigs(); updateStats(m.state.stats || {});
+      const first = allAssets.find(a => a.live);
+      if (first && !activeSym) selectAsset(first.symbol);
       break;
-    case 'tick': onTick(m.symbol,m.price,m.timestamp,m.volume); break;
-    case 'status':{const a=allAssets.find(x=>x.symbol===m.symbol);if(a){a.connected=m.connected;drawAssets();}} break;
-    case 'strategy':{const a=allAssets.find(x=>x.symbol===m.symbol);if(a){a.strategy={lean:m.lean,strength:m.strength,callW:m.callW,putW:m.putW,strategies:m.strategies};if(m.symbol===activeSym)updateStrategy(a.strategy);updateARow(m.symbol);}} break;
-    case 'signal': allSigs.unshift(m.signal);drawSigs();const el=document.getElementById('ar-'+m.signal.symbol);if(el){el.style.background=m.signal.direction==='CALL'?'rgba(38,166,154,.25)':'rgba(239,83,80,.25)';setTimeout(()=>el.style.background='',2500);} break;
-    case 'result':{const s=allSigs.find(x=>(x.uid||x.id+'')===m.uid);if(s){s.result=m.result;s.status='closed';}updateStats(m.stats||{});drawSigs();showToast(`${m.result==='WIN'?'🏆':'💔'} <b>${m.result}</b> · ${m.flag||''} ${m.name} · ${m.direction}<br>Close: ${m.closePrice} · ${m.pnl}`,m.result);} break;
-    case 'system': updateKillBtns(m.running,null); break;
-    case 'ai_toggle': updateKillBtns(null,m.enabled); break;
-    case 'assets': allAssets=m.assets;drawAssets(); break;
+
+    case 'tick':
+      onTick(m.symbol, m.price, m.timestamp, m.volume);
+      break;
+
+    case 'status': {
+      const a = allAssets.find(x => x.symbol === m.symbol);
+      if (a) { a.connected = m.connected; drawAssets(); }
+      break;
+    }
+
+    case 'strategy': {
+      const a = allAssets.find(x => x.symbol === m.symbol);
+      if (a) {
+        a.strategy = {
+          lean: m.lean, strength: m.strength,
+          callW: m.callW, putW: m.putW,
+          strategies: m.strategies,
+          fractals: m.fractals
+        };
+        if (m.symbol === activeSym) {
+          updateStrategy(a.strategy);
+          // Draw fractal markers on chart
+          if (m.fractals) drawFractals(m.fractals);
+        }
+        updateARow(m.symbol);
+      }
+      break;
+    }
+
+    case 'signal':
+      allSigs.unshift(m.signal); drawSigs();
+      const el = document.getElementById('ar-' + m.signal.symbol);
+      if (el) {
+        el.style.background = m.signal.direction === 'CALL' ? 'rgba(38,166,154,.25)' : 'rgba(239,83,80,.25)';
+        setTimeout(() => el.style.background = '', 2500);
+      }
+      break;
+
+    case 'result': {
+      const s = allSigs.find(x => (x.uid || x.id + '') === m.uid);
+      if (s) { s.result = m.result; s.status = 'closed'; }
+      updateStats(m.stats || {}); drawSigs();
+      showToast(`${m.result === 'WIN' ? '🏆' : '💔'} <b>${m.result}</b> · ${m.flag || ''} ${m.name} · ${m.direction}<br>Close: ${m.closePrice} · ${m.pnl}`, m.result);
+      break;
+    }
+
+    case 'candle':
+      // Update candle map and redraw if active
+      if (!cm[m.symbol]) cm[m.symbol] = {};
+      if (m.candle) cm[m.symbol][m.candle.time] = m.candle;
+      if (m.symbol === activeSym) redraw();
+      break;
+
+    case 'system': updateKillBtns(m.running, null); break;
+    case 'ai_toggle': updateKillBtns(null, m.enabled); break;
+    case 'assets': allAssets = m.assets; drawAssets(); break;
   }
 }
 
-window.addEventListener('load',()=>{initChart();connectWS();});
+window.addEventListener('load', () => { initChart(); connectWS(); });
 </script>
 </body></html>
