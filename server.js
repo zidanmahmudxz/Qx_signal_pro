@@ -17,13 +17,14 @@ const API_HOST = process.env.API_HOST||'api.gochart.in';
 const API_PATH = process.env.API_PATH||'/api/v1/market/tick-stream';
 const TF       = 60;
 
-// Runtime state
 const builders   = {};
 const lastPrice  = {};
 const connected  = {};
 const stratCache = {};
 const streams    = {};
 const lastSigAt  = {};
+// Track last fractal time per symbol to avoid duplicate alerts
+const lastFractalAt = {};
 
 const httpServer = http.createServer(route);
 const wss        = new WebSocket.Server({server:httpServer});
@@ -58,7 +59,6 @@ function route(req,res){
   res.setHeader('Access-Control-Allow-Methods','GET,POST,PUT,DELETE,OPTIONS');
   if(req.method==='OPTIONS'){res.writeHead(204);res.end();return;}
 
-  // Pages
   const pages={'/'           :'public/pages/dashboard.html',
                '/dashboard'  :'public/pages/dashboard.html',
                '/signals'    :'public/pages/signals.html',
@@ -73,14 +73,11 @@ function route(req,res){
     return serveFile(res,'public'+pt,mime);
   }
 
-  // Auth
   if(pt==='/api/login'&&req.method==='POST') return apiLogin(req,res);
 
-  // Protected
   const user=auth.fromReq(req);
   if(pt.startsWith('/api/')&&!user){res.writeHead(401);res.end(JSON.stringify({error:'Unauthorized'}));return;}
 
-  // GET routes
   if(req.method==='GET'){
     if(pt==='/api/state')      return json(res,getState());
     if(pt==='/api/stats')      return json(res,db.getStats());
@@ -94,7 +91,6 @@ function route(req,res){
     if(pt==='/api/future-signals') return json(res,db.getPendingFutureSignals());
   }
 
-  // POST routes
   if(req.method==='POST'){
     if(pt==='/api/system/kill')      return apiSystemKill(req,res);
     if(pt==='/api/system/ai-toggle') return apiAIToggle(req,res);
@@ -172,7 +168,9 @@ async function apiStrategiesUpdate(req,res){
   items.forEach(s=>{
     db.setStrategyEnabled(s.key,s.enabled);
     db.setStrategyMarket(s.key,s.market_type);
-    if(s.params)db.setStrategyParams(s.key,s.params);
+    if(s.signal_mode)    db.setStrategyMode(s.key,s.signal_mode);
+    if(s.custom_strat_msg !== undefined) db.setStrategyCustomMsg(s.key,s.custom_strat_msg);
+    if(s.params)         db.setStrategyParams(s.key,s.params);
   });
   bcast({type:'strategies',strategies:db.getStrategies()});
   json(res,{ok:true});
@@ -298,35 +296,56 @@ async function analyse(symbol,asset,currentPrice,timestamp){
   const runner=new StrategyRunner(candles,asset.market||'OTC');
   const sr=runner.run();if(!sr)return;
 
-  stratCache[symbol]={lean:sr.lean,strength:sr.strength,callW:sr.callW,putW:sr.putW,strategies:sr.allMatched};
+  stratCache[symbol]={
+    lean:sr.lean,strength:sr.strength,callW:sr.callW,putW:sr.putW,
+    strategies:sr.allMatched,fractals:sr.fractals
+  };
   bcast({type:'strategy',symbol,...stratCache[symbol]});
 
-  // Check minimum match threshold
+  // ── Custom Strategy Messages (MSG_ONLY or BOTH with custom_strat_msg) ──
+  for (const r of sr.allResults) {
+    if (r.custom_strat_msg && r.custom_strat_msg.trim()) {
+      // Send custom strategy alert for this matched strategy
+      const utc6Time = _fmt6(Math.floor(timestamp));
+      telegram.sendCustomStrategyMsg(asset, r.name, r.signal, r.reason, r.custom_strat_msg);
+      bcast({ type:'strat_alert', symbol, stratName:r.name, signal:r.signal, reason:r.reason, customMsg:r.custom_strat_msg, time:timestamp });
+    }
+  }
+
+  // ── Fractal special alert (sent immediately when fractal is confirmed) ──
+  const fractalResult = sr.allResults.find(r => r.key === 'fractal' && r.fractalTime);
+  if (fractalResult) {
+    const fracKey = `${symbol}_${fractalResult.fractalTime}`;
+    if (!lastFractalAt[fracKey]) {
+      lastFractalAt[fracKey] = Date.now();
+      const utc6Time = _fmt6(fractalResult.fractalTime);
+      telegram.sendFractalAlert(asset, fractalResult.signal, utc6Time, fractalResult.reason);
+      console.log(`[FRACTAL] ${symbol} ${fractalResult.signal} @ ${utc6Time} (UTC+6)`);
+      // Cleanup old keys
+      setTimeout(() => delete lastFractalAt[fracKey], 300000);
+    }
+  }
+
+  // ── Signal generation (only BOTH and SIGNAL_ONLY strategies count) ──
   const minMatch=parseInt(db.getSetting('strategy_min_match','2'));
   const matched=sr.allMatched.length;
   if(sr.lean==='NEUTRAL'||matched<minMatch)return;
 
-  // Conflict check
   const tot=sr.callW+sr.putW;
   if(tot>0&&Math.max(sr.callW,sr.putW)/tot<0.6)return;
 
-  // Cooldown
   const now=Date.now();
   if(lastSigAt[symbol]&&now-lastSigAt[symbol]<120000)return;
 
-  // Signal cutoff check
   const entryTime=Math.ceil(timestamp/TF)*TF;
   const cutoffSec=parseInt(db.getSetting('signal_cutoff_sec','10'));
   const secsToEntry=entryTime-(timestamp);
   if(secsToEntry<0||secsToEntry>TF)return;
-  // If entry time is too close (less than cutoff) — still deliver (removed the skip rule)
 
-  // AI
   const ai=await aiEngine.analyze(sr,asset);
   if(!ai||ai.verdict==='SKIP'){console.log(`[AI] SKIP ${symbol} — ${ai?.reason}`);return;}
   if(ai.confidence<parseInt(db.getSetting('ai_min_confidence')||'72'))return;
 
-  // Build signal
   const expiryTime=entryTime+TF;
   const customMsg=db.getSetting('custom_msg','');
   const signal={
@@ -345,6 +364,13 @@ async function analyse(symbol,asset,currentPrice,timestamp){
   telegram.sendLiveSignal(signal);
   bcast({type:'signal',signal});
   console.log(`[SIGNAL] 🚀 ${signal.direction} ${asset.name} | AI:${ai.confidence}% | ${signal.uid}`);
+}
+
+function _fmt6(unixSec) {
+  const d = new Date((unixSec + 6*3600)*1000);
+  const hh = d.getUTCHours().toString().padStart(2,'0');
+  const mm = d.getUTCMinutes().toString().padStart(2,'0');
+  return `${hh}:${mm}`;
 }
 
 // ── STATE ──
@@ -382,6 +408,7 @@ async function start(){
     console.log('');
     console.log('  ╔═══════════════════════════════════════════════╗');
     console.log('  ║   ⚡ Signal Pro v5.0 — Quotex Edition          ║');
+    console.log('  ║   🕐 Timezone: UTC+6                           ║');
     console.log('  ╚═══════════════════════════════════════════════╝');
     console.log(`  🌐 http://localhost:${PORT}`);
     console.log(`  📡 API: ${API_HOST}`);
