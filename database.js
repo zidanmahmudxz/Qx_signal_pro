@@ -13,6 +13,7 @@ class DB {
       this.db.pragma('journal_mode = WAL');
       this.db.pragma('synchronous = NORMAL');
       this._schema();
+      this._migrate();
       this._scheduleCleanup();
       this.ok = true;
       console.log('[DB] ✅ SQLite ready → spv5.db');
@@ -21,7 +22,6 @@ class DB {
 
   _schema() {
     this.db.exec(`
-      -- Users
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
@@ -30,7 +30,6 @@ class DB {
         created_at INTEGER DEFAULT (strftime('%s','now'))
       );
 
-      -- Assets (pairs)
       CREATE TABLE IF NOT EXISTS assets (
         symbol     TEXT PRIMARY KEY,
         name       TEXT NOT NULL,
@@ -41,7 +40,6 @@ class DB {
         sort_order INTEGER DEFAULT 99
       );
 
-      -- Candles
       CREATE TABLE IF NOT EXISTS candles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         symbol TEXT NOT NULL,
@@ -51,7 +49,6 @@ class DB {
       );
       CREATE INDEX IF NOT EXISTS ic ON candles(symbol, time DESC);
 
-      -- Live Signals
       CREATE TABLE IF NOT EXISTS signals (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         uid         TEXT UNIQUE NOT NULL,
@@ -74,7 +71,6 @@ class DB {
       CREATE INDEX IF NOT EXISTS is2 ON signals(status);
       CREATE INDEX IF NOT EXISTS is3 ON signals(symbol);
 
-      -- Future Signals
       CREATE TABLE IF NOT EXISTS future_signals (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         batch_id    TEXT NOT NULL,
@@ -91,21 +87,20 @@ class DB {
       CREATE INDEX IF NOT EXISTS ifs1 ON future_signals(entry_time ASC);
       CREATE INDEX IF NOT EXISTS ifs2 ON future_signals(delivered);
 
-      -- Telegram Chat IDs
       CREATE TABLE IF NOT EXISTS tg_chats (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id     TEXT UNIQUE NOT NULL,
         name        TEXT NOT NULL,
-        perm_live_signal    INTEGER DEFAULT 1,
-        perm_future_pre     INTEGER DEFAULT 1,
-        perm_future_result  INTEGER DEFAULT 1,
-        perm_live_result    INTEGER DEFAULT 1,
-        perm_custom_msg     INTEGER DEFAULT 1,
+        perm_live_signal        INTEGER DEFAULT 1,
+        perm_future_pre         INTEGER DEFAULT 1,
+        perm_future_result      INTEGER DEFAULT 1,
+        perm_live_result        INTEGER DEFAULT 1,
+        perm_custom_msg         INTEGER DEFAULT 1,
+        perm_custom_strat_msg   INTEGER DEFAULT 1,
         active      INTEGER DEFAULT 1,
         created_at  INTEGER DEFAULT (strftime('%s','now'))
       );
 
-      -- Strategies config
       CREATE TABLE IF NOT EXISTS strategies (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         key         TEXT UNIQUE NOT NULL,
@@ -114,16 +109,16 @@ class DB {
         enabled     INTEGER DEFAULT 1,
         market_type TEXT DEFAULT 'BOTH',
         sort_order  INTEGER DEFAULT 99,
-        params      TEXT DEFAULT '{}'
+        params      TEXT DEFAULT '{}',
+        signal_mode TEXT DEFAULT 'BOTH',
+        custom_strat_msg TEXT DEFAULT ''
       );
 
-      -- System settings (key/value)
       CREATE TABLE IF NOT EXISTS settings (
         key   TEXT PRIMARY KEY,
         value TEXT
       );
 
-      -- Future signal accepted sources
       CREATE TABLE IF NOT EXISTS future_sources (
         chat_id TEXT PRIMARY KEY,
         name    TEXT
@@ -135,6 +130,25 @@ class DB {
     this._seedStrategies();
   }
 
+  _migrate() {
+    // Add new columns if they don't exist (for existing DBs)
+    const cols = this.db.prepare("PRAGMA table_info(tg_chats)").all().map(c => c.name);
+    if (!cols.includes('perm_custom_strat_msg')) {
+      this.db.exec("ALTER TABLE tg_chats ADD COLUMN perm_custom_strat_msg INTEGER DEFAULT 1");
+      console.log('[DB] Migrated: tg_chats.perm_custom_strat_msg');
+    }
+
+    const scols = this.db.prepare("PRAGMA table_info(strategies)").all().map(c => c.name);
+    if (!scols.includes('signal_mode')) {
+      this.db.exec("ALTER TABLE strategies ADD COLUMN signal_mode TEXT DEFAULT 'BOTH'");
+      console.log('[DB] Migrated: strategies.signal_mode');
+    }
+    if (!scols.includes('custom_strat_msg')) {
+      this.db.exec("ALTER TABLE strategies ADD COLUMN custom_strat_msg TEXT DEFAULT ''");
+      console.log('[DB] Migrated: strategies.custom_strat_msg');
+    }
+  }
+
   _seedSettings() {
     const defaults = {
       system_running    : '1',
@@ -143,6 +157,9 @@ class DB {
       signal_cutoff_sec : '10',
       custom_msg        : '',
       future_pre_minutes: '1',
+      candle_tf         : '60',
+      ai_min_confidence : '72',
+      cooldown_ms       : '120000',
     };
     const ins = this.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
     Object.entries(defaults).forEach(([k,v]) => ins.run(k,v));
@@ -169,26 +186,26 @@ class DB {
 
   _seedStrategies() {
     const STRATS = [
-      // New strategies first
-      ['2g2r',       '2 Green 2 Red',        'Down trend এ ২টি Green → ১টি Red → PUT signal', 1, 'OTC',  1, '{}'],
-      ['3g2r',       '3 Green 2 Red',        'Down trend এ ৩টি Green → ১টি Red → PUT signal', 1, 'OTC',  2, '{}'],
-      ['fractal',    'Fractal',              'Down trend এ Bearish Fractal arrow → PUT signal', 1, 'OTC',  3, '{"period":2}'],
-      ['rsi_ob_os',  'RSI Overbought/Oversold','RSI>70 PUT, RSI<30 CALL (OTC mean reversion)', 1, 'BOTH', 4, '{"period":14,"ob":70,"os":30}'],
-      ['rsi_cross',  'RSI Centerline Cross', 'RSI 50 cross → trend confirmation',              0, 'BOTH', 5, '{"period":14}'],
-      ['rsi_div',    'RSI Divergence',       'Price vs RSI divergence → reversal signal',      0, 'BOTH', 6, '{"period":14}'],
-      // Existing strategies
-      ['color_seq',  'Color Sequence',       '3 same color candles → reversal',                1, 'BOTH', 7, '{}'],
-      ['doji_rev',   'Doji Reversal',        'Doji candle → next candle reversal',             1, 'BOTH', 8, '{}'],
-      ['sr_bounce',  'S/R Bounce',           'Support/Resistance bounce signal',               1, 'BOTH', 9, '{}'],
-      ['momentum',   'Momentum Reversal',    'Momentum acceleration reversal',                 1, 'BOTH',10, '{}'],
-      ['engulfing',  'Engulfing Pattern',    'Bull/Bear engulfing candlestick pattern',        1, 'BOTH',11, '{}'],
-      ['hammer',     'Hammer/Shooting Star', 'Hammer (CALL) or Shooting Star (PUT)',           1, 'BOTH',12, '{}'],
-      ['pin_bar',    'Pin Bar',              'Long wick rejection → reversal',                 1, 'BOTH',13, '{}'],
-      ['mean_rev',   'Mean Reversion',       'Price deviation from 20-candle avg',             1, 'OTC', 14, '{"threshold":0.06}'],
-      ['vol_spike',  'Volume Spike',         'Volume spike confirms direction',                1, 'BOTH',15, '{}'],
-      ['hh_hl',      'Price Structure HH/HL','Higher Highs/Lows or Lower Highs/Lows trend',   1, 'BOTH',16, '{}'],
+      ['2g2r',      '2 Green 2 Red',         'Down trend এ ২টি Green → ১টি Red → PUT signal', 1,'OTC', 1,'{}','BOTH',''],
+      ['3g2r',      '3 Green 2 Red',          'Down trend এ ৩টি Green → ১টি Red → PUT signal',1,'OTC', 2,'{}','BOTH',''],
+      ['fractal',   'Fractal',               'Quotex Fractal arrow → PUT/CALL signal',         1,'OTC', 3,'{"period":2}','BOTH',''],
+      ['rsi_ob_os', 'RSI Overbought/Oversold','RSI>70 PUT, RSI<30 CALL',                       1,'BOTH',4,'{"period":14,"ob":70,"os":30}','BOTH',''],
+      ['rsi_cross', 'RSI Centerline Cross',   'RSI 50 cross → trend confirmation',             0,'BOTH',5,'{"period":14}','BOTH',''],
+      ['rsi_div',   'RSI Divergence',         'Price vs RSI divergence → reversal signal',     0,'BOTH',6,'{"period":14}','BOTH',''],
+      ['color_seq', 'Color Sequence',         '3 same color candles → reversal',               1,'BOTH',7,'{}','BOTH',''],
+      ['doji_rev',  'Doji Reversal',          'Doji candle → next candle reversal',            1,'BOTH',8,'{}','BOTH',''],
+      ['sr_bounce', 'S/R Bounce',             'Support/Resistance bounce signal',              1,'BOTH',9,'{}','BOTH',''],
+      ['momentum',  'Momentum Reversal',      'Momentum acceleration reversal',                1,'BOTH',10,'{}','BOTH',''],
+      ['engulfing', 'Engulfing Pattern',      'Bull/Bear engulfing candlestick pattern',       1,'BOTH',11,'{}','BOTH',''],
+      ['hammer',    'Hammer/Shooting Star',   'Hammer (CALL) or Shooting Star (PUT)',          1,'BOTH',12,'{}','BOTH',''],
+      ['pin_bar',   'Pin Bar',               'Long wick rejection → reversal',                1,'BOTH',13,'{}','BOTH',''],
+      ['mean_rev',  'Mean Reversion',         'Price deviation from 20-candle avg',            1,'OTC', 14,'{"threshold":0.06}','BOTH',''],
+      ['vol_spike', 'Volume Spike',           'Volume spike confirms direction',               1,'BOTH',15,'{}','BOTH',''],
+      ['hh_hl',     'Price Structure HH/HL',  'Higher Highs/Lows or Lower Highs/Lows trend',  1,'BOTH',16,'{}','BOTH',''],
     ];
-    const ins = this.db.prepare('INSERT OR IGNORE INTO strategies(key,name,description,enabled,market_type,sort_order,params) VALUES(?,?,?,?,?,?,?)');
+    const ins = this.db.prepare(`INSERT OR IGNORE INTO strategies
+      (key,name,description,enabled,market_type,sort_order,params,signal_mode,custom_strat_msg)
+      VALUES(?,?,?,?,?,?,?,?,?)`);
     STRATS.forEach(s => ins.run(...s));
   }
 
@@ -280,11 +297,16 @@ class DB {
   }
 
   // STRATEGIES
-  getStrategies() { return this.ok ? this.db.prepare('SELECT * FROM strategies ORDER BY sort_order ASC').all().map(s=>({...s,params:this._j(s.params,{})})) : []; }
-  setStrategyEnabled(key,en) { if(this.ok) this.db.prepare('UPDATE strategies SET enabled=? WHERE key=?').run(en?1:0,key); }
-  setStrategyMarket(key,mt)  { if(this.ok) this.db.prepare('UPDATE strategies SET market_type=? WHERE key=?').run(mt,key); }
-  setStrategyParams(key,p)   { if(this.ok) this.db.prepare('UPDATE strategies SET params=? WHERE key=?').run(JSON.stringify(p),key); }
-  updateStrategyOrder(keys)  {
+  getStrategies() {
+    return this.ok ? this.db.prepare('SELECT * FROM strategies ORDER BY sort_order ASC').all()
+      .map(s=>({...s,params:this._j(s.params,{})})) : [];
+  }
+  setStrategyEnabled(key,en)    { if(this.ok) this.db.prepare('UPDATE strategies SET enabled=? WHERE key=?').run(en?1:0,key); }
+  setStrategyMarket(key,mt)     { if(this.ok) this.db.prepare('UPDATE strategies SET market_type=? WHERE key=?').run(mt,key); }
+  setStrategyParams(key,p)      { if(this.ok) this.db.prepare('UPDATE strategies SET params=? WHERE key=?').run(JSON.stringify(p),key); }
+  setStrategyMode(key,mode)     { if(this.ok) this.db.prepare('UPDATE strategies SET signal_mode=? WHERE key=?').run(mode,key); }
+  setStrategyCustomMsg(key,msg) { if(this.ok) this.db.prepare('UPDATE strategies SET custom_strat_msg=? WHERE key=?').run(msg||'',key); }
+  updateStrategyOrder(keys) {
     const stmt=this.db.prepare('UPDATE strategies SET sort_order=? WHERE key=?');
     keys.forEach((k,i)=>stmt.run(i,k));
   }
@@ -294,15 +316,15 @@ class DB {
   }
 
   // TELEGRAM CHATS
-  getTgChats()      { return this.ok ? this.db.prepare('SELECT * FROM tg_chats ORDER BY created_at ASC').all() : []; }
-  getActiveTgChats(){ return this.ok ? this.db.prepare('SELECT * FROM tg_chats WHERE active=1').all() : []; }
+  getTgChats()       { return this.ok ? this.db.prepare('SELECT * FROM tg_chats ORDER BY created_at ASC').all() : []; }
+  getActiveTgChats() { return this.ok ? this.db.prepare('SELECT * FROM tg_chats WHERE active=1').all() : []; }
   addTgChat(chatId,name,perms) {
     if(!this.ok) return false;
     try{
       this.db.prepare(`INSERT OR REPLACE INTO tg_chats
-        (chat_id,name,perm_live_signal,perm_future_pre,perm_future_result,perm_live_result,perm_custom_msg,active)
-        VALUES(?,?,?,?,?,?,?,1)`)
-        .run(chatId,name,perms.live?1:0,perms.futPre?1:0,perms.futRes?1:0,perms.liveRes?1:0,perms.customMsg?1:0);
+        (chat_id,name,perm_live_signal,perm_future_pre,perm_future_result,perm_live_result,perm_custom_msg,perm_custom_strat_msg,active)
+        VALUES(?,?,?,?,?,?,?,?,1)`)
+        .run(chatId,name,perms.live?1:0,perms.futPre?1:0,perms.futRes?1:0,perms.liveRes?1:0,perms.customMsg?1:0,perms.customStratMsg?1:0);
       return true;
     }catch(e){return false;}
   }
@@ -323,82 +345,46 @@ class DB {
     if(!this.ok) return [];
     return this.db.prepare('SELECT * FROM future_signals WHERE delivered=0 AND result IS NULL ORDER BY entry_time ASC').all();
   }
-  getExpiredFutureSignals(batchId) {
-    if(!this.ok) return [];
-    const now=Math.floor(Date.now()/1000);
-    return this.db.prepare('SELECT * FROM future_signals WHERE batch_id=? AND entry_time<? AND result IS NULL').all(batchId,now);
+  getAllUnresolvedFutureSignals() {
+    if (!this.ok) return [];
+    return this.db.prepare('SELECT * FROM future_signals WHERE result IS NULL ORDER BY entry_time ASC').all();
   }
   markFutureDelivered(id) { if(this.ok) this.db.prepare('UPDATE future_signals SET delivered=1 WHERE id=?').run(id); }
   closeFutureSignal(id,result,closePrice) {
     if(this.ok) this.db.prepare('UPDATE future_signals SET result=?,close_price=?,result_sent=0 WHERE id=?').run(result,closePrice,id);
   }
   markFutureResultSent(id) { if(this.ok) this.db.prepare('UPDATE future_signals SET result_sent=1 WHERE id=?').run(id); }
-  getPendingFutureResults() {
-    if(!this.ok) return [];
-    return this.db.prepare('SELECT * FROM future_signals WHERE result IS NOT NULL AND result_sent=0').all();
-  }
-
-    getAllUnresolvedFutureSignals() {
-    if (!this.ok) return [];
-    return this.db.prepare(
-      'SELECT * FROM future_signals WHERE result IS NULL ORDER BY entry_time ASC'
-    ).all();
-  }
-
-  // ── FUTURE SIGNAL: BATCH LIST (grouped by batch_id) ──
   getFutureBatches() {
     if (!this.ok) return [];
-    return this.db.prepare(`
-      SELECT batch_id,
-             COUNT(*) as total,
-             MIN(created_at) as created_at
-      FROM future_signals
-      GROUP BY batch_id
-      ORDER BY created_at DESC
-    `).all();
+    return this.db.prepare(`SELECT batch_id, COUNT(*) as total, MIN(created_at) as created_at
+      FROM future_signals GROUP BY batch_id ORDER BY created_at DESC`).all();
   }
-
-  // ── FUTURE SIGNAL: ALL SIGNALS IN A BATCH ──
   getFutureSignalsByBatch(batchId) {
     if (!this.ok) return [];
-    return this.db.prepare(
-      'SELECT * FROM future_signals WHERE batch_id=? ORDER BY entry_time ASC'
-    ).all(batchId);
+    return this.db.prepare('SELECT * FROM future_signals WHERE batch_id=? ORDER BY entry_time ASC').all(batchId);
   }
-
-  // ── FUTURE SIGNAL: DELETE A SINGLE SIGNAL ──
-  deleteFutureSignal(id) {
-    if (this.ok) this.db.prepare('DELETE FROM future_signals WHERE id=?').run(id);
-  }
-
-  // ── FUTURE SIGNAL: DELETE ENTIRE BATCH ──
+  deleteFutureSignal(id)    { if(this.ok) this.db.prepare('DELETE FROM future_signals WHERE id=?').run(id); }
   deleteFutureBatch(batchId) {
     if (!this.ok) return 0;
-    const info = this.db.prepare('DELETE FROM future_signals WHERE batch_id=?').run(batchId);
-    return info.changes;
+    return this.db.prepare('DELETE FROM future_signals WHERE batch_id=?').run(batchId).changes;
   }
-
-  // ── FUTURE SIGNAL: EDIT (update direction + entry_time) ──
   editFutureSignal(id, newData) {
     if (!this.ok) return false;
     try {
-      this.db.prepare(
-        'UPDATE future_signals SET symbol=?, symbol_raw=?, direction=?, entry_time=? WHERE id=? AND delivered=0 AND result IS NULL'
-      ).run(newData.symbol, newData.symbolRaw, newData.direction, newData.entryTime, id);
+      this.db.prepare('UPDATE future_signals SET symbol=?,symbol_raw=?,direction=?,entry_time=? WHERE id=? AND delivered=0 AND result IS NULL')
+        .run(newData.symbol,newData.symbolRaw,newData.direction,newData.entryTime,id);
       return true;
-    } catch (e) {
-      return false;
-    }
+    } catch(e) { return false; }
   }
-
-  // ── FUTURE SIGNAL: RECENT RESULTS ──
-  getRecentFutureResults(limit = 20) {
+  getRecentFutureResults(limit=20) {
     if (!this.ok) return [];
-    return this.db.prepare(
-      'SELECT * FROM future_signals WHERE result IS NOT NULL ORDER BY entry_time DESC LIMIT ?'
-    ).all(limit);
+    return this.db.prepare('SELECT * FROM future_signals WHERE result IS NOT NULL ORDER BY entry_time DESC LIMIT ?').all(limit);
   }
-
+  getExpiredUnresolvedFuture() {
+    if (!this.ok) return [];
+    const now = Math.floor(Date.now()/1000);
+    return this.db.prepare('SELECT * FROM future_signals WHERE result IS NULL AND entry_time < ? ORDER BY entry_time ASC').all(now - 60);
+  }
 
   // FUTURE SOURCES
   getFutureSources()      { return this.ok ? this.db.prepare('SELECT * FROM future_sources').all() : []; }
