@@ -4,7 +4,7 @@
 <title>Signal Pro v5 — Strategies</title>
 <link rel="stylesheet" href="/css/shared.css">
 <style>
-.page-inner{max-width:820px;margin:0 auto}
+.page-inner{max-width:860px;margin:0 auto}
 .strat-list{display:flex;flex-direction:column;gap:8px}
 .scard{background:var(--bg2);border:1px solid var(--b2);border-radius:9px;overflow:hidden;cursor:grab;user-select:none;transition:box-shadow .2s}
 .scard:active{cursor:grabbing}.scard.dragging{opacity:.5;box-shadow:0 4px 20px rgba(0,0,0,.5)}
@@ -14,17 +14,29 @@
 .scard-name{flex:1}
 .sname{font-size:13px;font-weight:600;color:#fff}
 .sdesc{font-size:10px;color:var(--mu2);margin-top:2px}
-.scard-controls{display:flex;align-items:center;gap:10px}
-.mkt-sel{width:90px;padding:5px 7px;font-size:11px}
-.scard-params{padding:0 14px 12px;border-top:1px solid var(--b1);margin-top:0}
-.params-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;padding-top:10px}
+.scard-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mkt-sel,.mode-sel{padding:5px 7px;font-size:11px}
+.mkt-sel{width:90px}.mode-sel{width:130px}
+.scard-ext{padding:8px 14px 12px;border-top:1px solid var(--b1);background:var(--bg3)}
+.ext-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+.ext-label{font-size:10px;color:var(--mu2);text-transform:uppercase;letter-spacing:.05em;width:110px;flex-shrink:0}
+.ext-row input[type=text],.ext-row textarea{flex:1;font-size:11px;padding:6px 9px}
+.mode-badges{display:flex;gap:5px;flex-wrap:wrap;margin-top:4px}
+.mode-badge{font-size:9px;padding:2px 8px;border-radius:10px}
+.mode-badge.signal{background:var(--upd);color:var(--up)}
+.mode-badge.msg{background:rgba(33,150,243,.2);color:var(--acc)}
+.mode-badge.both{background:rgba(245,158,11,.15);color:var(--gold)}
+.scard-params{padding:8px 14px 12px;border-top:1px solid var(--b1)}
+.params-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
 .pfg{display:flex;flex-direction:column;gap:4px}
 .pfg label{font-size:9px;color:var(--mu2);text-transform:uppercase;letter-spacing:.05em}
 .pfg input{padding:5px 8px;font-size:11px;font-family:var(--mono)}
-.save-strip{position:sticky;bottom:0;background:var(--bg);padding:12px 0;border-top:1px solid var(--b2);margin-top:12px;display:flex;gap:10px;align-items:center}
+.save-strip{position:sticky;bottom:0;background:var(--bg);padding:12px 0;border-top:1px solid var(--b2);margin-top:12px;display:flex;gap:10px;align-items:center;z-index:10}
 .match-ctrl{background:var(--bg2);border:1px solid var(--b2);border-radius:9px;padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .match-ctrl .ml{font-size:12px;color:var(--mu2);flex:1}
 .match-ctrl input{width:80px}
+.mode-info{background:var(--bg3);border:1px solid var(--b1);border-radius:7px;padding:10px 14px;margin-bottom:14px;font-size:11px;color:var(--mu2);line-height:1.9}
+.mode-info b{color:#fff}
 </style>
 </head><body>
 <nav id="nav">
@@ -46,11 +58,19 @@
 <div class="page-inner">
   <div class="page-title">📊 Strategy Management</div>
 
+  <!-- Signal Mode Info -->
+  <div class="mode-info">
+    <b>Signal Mode:</b> প্রতিটি Strategy তে ৩টি Mode আছে:<br>
+    <b style="color:var(--gold)">Signal + Msg</b> — Live Signal এ যুক্ত হবে AND Custom Strategy Msg ও পাঠাবে<br>
+    <b style="color:var(--up)">Signal Only</b> — শুধু Live Signal এ যুক্ত হবে, কোনো আলাদা Msg নয়<br>
+    <b style="color:var(--acc)">Msg Only</b> — Live Signal এ যুক্ত হবে না, শুধু Custom Strategy Msg পাঠাবে
+  </div>
+
   <!-- Min match -->
   <div class="match-ctrl">
     <div class="ml">
       <b style="color:#fff">Minimum Match Threshold:</b><br>
-      কতটি active strategy match করলে signal generate হবে
+      কতটি active strategy (Signal Only বা Signal+Msg) match করলে signal generate হবে
     </div>
     <input type="number" id="min-match" min="1" max="10" value="2" style="width:80px">
     <span style="font-size:12px;color:var(--mu2)">strategies</span>
@@ -83,26 +103,53 @@ const PARAM_LABELS = {
   period:'Period', ob:'Overbought', os:'Oversold', threshold:'Threshold (%)'
 };
 
+const MODE_OPTIONS = [
+  { value:'BOTH',         label:'Signal + Msg' },
+  { value:'SIGNAL_ONLY',  label:'Signal Only' },
+  { value:'MSG_ONLY',     label:'Msg Only' },
+];
+
 function render(){
   const list=document.getElementById('strat-list');list.innerHTML='';
   strategies.forEach((s,i)=>{
     const card=document.createElement('div');
     card.className='scard';card.draggable=true;card.dataset.key=s.key;
     const hasParams=s.params&&Object.keys(s.params).length>0;
+    const mode=s.signal_mode||'BOTH';
+    const modeColor=mode==='SIGNAL_ONLY'?'var(--up)':mode==='MSG_ONLY'?'var(--acc)':'var(--gold)';
+    const modeLabel=MODE_OPTIONS.find(o=>o.value===mode)?.label||mode;
+
+    const modeOptHtml=MODE_OPTIONS.map(o=>
+      `<option value="${o.value}" ${mode===o.value?'selected':''}>${o.label}</option>`
+    ).join('');
+
     card.innerHTML=
       `<div class="scard-top">`+
         `<span class="drag-handle">⠿</span>`+
-        `<div class="scard-name"><div class="sname">${s.name}</div><div class="sdesc">${s.description||''}</div></div>`+
+        `<div class="scard-name">`+
+          `<div class="sname">${s.name} <span style="font-size:9px;color:${modeColor};margin-left:5px">[${modeLabel}]</span></div>`+
+          `<div class="sdesc">${s.description||''}</div>`+
+        `</div>`+
         `<div class="scard-controls">`+
           `<select class="mkt-sel" data-key="${s.key}" onchange="setMkt(this)">`+
             `<option value="OTC" ${s.market_type==='OTC'?'selected':''}>OTC Only</option>`+
             `<option value="FOREX" ${s.market_type==='FOREX'?'selected':''}>FOREX Only</option>`+
             `<option value="BOTH" ${s.market_type==='BOTH'?'selected':''}>Both</option>`+
           `</select>`+
+          `<select class="mode-sel" data-key="${s.key}" onchange="setMode(this)">${modeOptHtml}</select>`+
           `<label class="tgl"><input type="checkbox" ${s.enabled?'checked':''} data-key="${s.key}" onchange="setEnabled(this)">`+
           `<div class="ttrack"></div><div class="tthumb"></div></label>`+
         `</div>`+
       `</div>`+
+      // Custom strategy message field
+      `<div class="scard-ext">`+
+        `<div class="ext-row">`+
+          `<span class="ext-label">Custom Msg</span>`+
+          `<input type="text" data-key="${s.key}" class="strat-msg-input" value="${s.custom_strat_msg||''}" placeholder="যেমন: ⚠️ ${s.name} matched! সাবধানে trade করুন">`+
+        `</div>`+
+        `<div style="font-size:9px;color:var(--mu);padding-left:120px">খালি রাখলে কোনো Custom Msg পাঠাবে না। Msg Only mode এ custom msg আবশ্যক।</div>`+
+      `</div>`+
+      // Params
       (hasParams?`<div class="scard-params"><div class="params-grid">`+
         Object.entries(s.params).map(([k,v])=>
           `<div class="pfg"><label>${PARAM_LABELS[k]||k}</label>`+
@@ -118,12 +165,11 @@ function render(){
     card.addEventListener('drop',e=>{
       e.preventDefault();card.classList.remove('drag-over');
       if(!dragSrc||dragSrc===card)return;
-      const list=document.getElementById('strat-list');
-      const allCards=[...list.querySelectorAll('.scard')];
+      const listEl=document.getElementById('strat-list');
+      const allCards=[...listEl.querySelectorAll('.scard')];
       const srcIdx=allCards.indexOf(dragSrc),dstIdx=allCards.indexOf(card);
       if(srcIdx<dstIdx)card.after(dragSrc);else card.before(dragSrc);
-      // Reorder strategies array
-      const keys=[...list.querySelectorAll('.scard')].map(c=>c.dataset.key);
+      const keys=[...listEl.querySelectorAll('.scard')].map(c=>c.dataset.key);
       strategies.sort((a,b)=>keys.indexOf(a.key)-keys.indexOf(b.key));
     });
 
@@ -139,10 +185,28 @@ function setMkt(el){
   const s=strategies.find(x=>x.key===el.dataset.key);
   if(s)s.market_type=el.value;
 }
+function setMode(el){
+  const s=strategies.find(x=>x.key===el.dataset.key);
+  if(s)s.signal_mode=el.value;
+  // Update label in name
+  const card=el.closest('.scard');
+  if(card){
+    const modeColor=el.value==='SIGNAL_ONLY'?'var(--up)':el.value==='MSG_ONLY'?'var(--acc)':'var(--gold)';
+    const modeLabel=MODE_OPTIONS.find(o=>o.value===el.value)?.label||el.value;
+    const nameSpan=card.querySelector('.scard-name .sname span');
+    if(nameSpan){nameSpan.style.color=modeColor;nameSpan.textContent=`[${modeLabel}]`;}
+  }
+}
 function setParam(el){
   const s=strategies.find(x=>x.key===el.dataset.key);
   if(s)s.params[el.dataset.param]=parseFloat(el.value)||el.value;
 }
+
+const MODE_OPTIONS = [
+  { value:'BOTH',        label:'Signal + Msg' },
+  { value:'SIGNAL_ONLY', label:'Signal Only' },
+  { value:'MSG_ONLY',    label:'Msg Only' },
+];
 
 async function saveMinMatch(){
   const v=document.getElementById('min-match').value;
@@ -151,6 +215,12 @@ async function saveMinMatch(){
 }
 
 async function saveAll(){
+  // Collect custom strat messages from inputs
+  document.querySelectorAll('.strat-msg-input').forEach(inp=>{
+    const s=strategies.find(x=>x.key===inp.dataset.key);
+    if(s)s.custom_strat_msg=inp.value.trim();
+  });
+
   const keys=[...document.getElementById('strat-list').querySelectorAll('.scard')].map(c=>c.dataset.key);
   await Promise.all([
     api('/api/strategies/update','POST',strategies),
