@@ -84,11 +84,13 @@ class TelegramManager {
   //  LEGENDARY MAIN MENU
   // ═══════════════════════════════════════════════════════
   _sendMainMenu(chatId, greetingText = '') {
+    const now = fmt6(Math.floor(Date.now()/1000));
     const text = greetingText ||
-`╔══════════════════╗
-║  📋 *MAIN MENU*  ║
-╚══════════════════╝
+`╔══════════════════════╗
+║   📋 *MAIN MENU*     ║
+╚══════════════════════╝
 
+🕐 \`${now}\` *(UTC+6)*
 একটি অপশন বেছে নিন 👇`;
 
     const buttons = [
@@ -147,32 +149,44 @@ class TelegramManager {
     const from     = msg.from;
     const fullName = [from?.first_name, from?.last_name].filter(Boolean).join(' ') || from?.username || 'User';
     const username = from?.username ? `@${from.username}` : `ID: ${chatId}`;
+    const now      = fmt6(Math.floor(Date.now()/1000));
 
     if (text.startsWith('/start')) {
       if (!db.isFutureSource(chatId)) {
         this._send(chatId,
-`🚫 *Access Denied*
+`╔═══════════════════════╗
+║  🚫 *ACCESS DENIED*  ║
+╚═══════════════════════╝
 
-আপনি authorized নন।
+আপনি এই bot ব্যবহারের অনুমতি পাননি।
 
-Admin কে আপনার Chat ID দিন:
+📋 আপনার Chat ID:
 \`${chatId}\`
+
+Admin কে এই ID টি দিন এবং অনুমতির জন্য অপেক্ষা করুন।
 
 ━━━━━━━━━━━━━━━━━
 ⚡ _Signal Pro v5 by ZidanX_`);
         return;
       }
 
+      // ── LEGENDARY WELCOME ──
       const greeting =
-`╔═══════════════════════╗
-║  ⚡ *Signal Pro v5*  ║
-║    *by ZidanX*        ║
-╚═══════════════════════╝
+`╔══════════════════════════╗
+║  ⚡ *SIGNAL PRO v5*     ║
+║  ✦ *by ZidanX* ✦        ║
+╚══════════════════════════╝
 
-✅ *স্বাগতম, ${fullName}!*
+🎉 *স্বাগতম, ${fullName}!*
 🆔 ${username}
+🕐 \`${now}\` *(UTC+6)*
 
-আপনি সফলভাবে authorized হয়েছেন।
+━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ আপনি সফলভাবে *Authorized*
+🧠 *AI + 16 Strategies* Active
+📡 *Quotex OTC* Signal System
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
 নিচের মেনু থেকে অপশন বেছে নিন 👇`;
 
       this._sendMainMenu(chatId, greeting);
@@ -409,7 +423,6 @@ _/menu লিখলে বাতিল হবে_`);
   _parseFutureList(text) {
     const lines   = text.split('\n');
     const signals = [];
-    // Use UTC+6 "now" as reference
     const nowUtc6 = Math.floor(Date.now()/1000) + 6*3600;
     const refDate  = new Date((nowUtc6)*1000);
     const todayY   = refDate.getUTCFullYear();
@@ -422,11 +435,8 @@ _/menu লিখলে বাতিল হবে_`);
       const [,, timeStr, assetRaw,, dirRaw] = m;
       const dir = (['DOWN','PUT'].includes(dirRaw.toUpperCase())) ? 'PUT' : 'CALL';
       const [hh, mm] = timeStr.split(':').map(Number);
-
-      // Build entry time in UTC from UTC+6 time input
       const entryUTC6 = Date.UTC(todayY, todayM, todayD, hh, mm, 0) / 1000;
-      const entryTime = entryUTC6 - 6*3600; // convert to UTC unix
-
+      const entryTime = entryUTC6 - 6*3600;
       const symbol = this._mapAsset(assetRaw);
       signals.push({ symbolRaw: assetRaw+' OTC', symbol, direction: dir, entryTime });
     }
@@ -518,16 +528,16 @@ ${icon} *${fs.symbol_raw||fs.symbol}*
   sendFutureResult(fs, result, closePrice) {
     if (!this.ok) return;
     const win  = result === 'WIN';
-    const icon = win ? '🏆' : '💔';
+    const icon = win ? '🏆' : result === 'TIE' ? '🤝' : '💔';
     const et   = fmt6(fs.entry_time);
     const text =
-`${icon} *FUTURE RESULT — ${win?'✅ WIN':'❌ LOSS'}*
+`${icon} *FUTURE RESULT — ${win?'✅ WIN':result==='TIE'?'🤝 TIE':'❌ LOSS'}*
 
 📊 *${fs.symbol_raw||fs.symbol}* | \`${fs.direction}\`
 ⏰ Entry: \`${et}\` *(UTC+6)*
 📍 Close: \`${closePrice||'N/A'}\`
 ━━━━━━━━━━━━━━━━━
-${win?'🎉 Signal WIN! Profit নিন!':'⚠️ Signal LOSS. পরের সুযোগের অপেক্ষায়।'}`;
+${win?'🎉 Signal WIN! Profit নিন!':result==='TIE'?'🤝 Tie।':'⚠️ Signal LOSS. পরের সুযোগের অপেক্ষায়।'}`;
 
     db.getActiveTgChats().forEach(chat => {
       if (chat.perm_future_result) this._send(chat.chat_id, text);
@@ -538,9 +548,11 @@ ${win?'🎉 Signal WIN! Profit নিন!':'⚠️ Signal LOSS. পরের স
     if (!this.ok || !results.length) return;
     const wins   = results.filter(r=>r.result==='WIN').length;
     const losses = results.filter(r=>r.result==='LOSS').length;
+    const ties   = results.filter(r=>r.result==='TIE').length;
+    const wr     = (wins+losses)>0?((wins/(wins+losses))*100).toFixed(1):'0.0';
     const lines = results.map((r, i) => {
       const et  = fmt6(r.entry_time);
-      const ico = r.result==='WIN'?'✅':r.result==='LOSS'?'❌':'❓';
+      const ico = r.result==='WIN'?'✅':r.result==='LOSS'?'❌':r.result==='TIE'?'🤝':'❓';
       return `${i+1}. ${ico} \`${et}\` ${r.symbol_raw||r.symbol} ${r.direction} → *${r.result||'N/A'}*`;
     }).join('\n');
     const text =
@@ -548,22 +560,24 @@ ${win?'🎉 Signal WIN! Profit নিন!':'⚠️ Signal LOSS. পরের স
 ━━━━━━━━━━━━━━━━━
 ${lines}
 ━━━━━━━━━━━━━━━━━
-🏆 WIN: ${wins} | ❌ LOSS: ${losses}`;
+🏆 WIN: ${wins} | ❌ LOSS: ${losses} | 🤝 TIE: ${ties}
+📈 Win Rate: ${wr}%`;
 
     db.getActiveTgChats().forEach(chat => {
       if (chat.perm_future_result) this._send(chat.chat_id, text);
     });
   }
 
-  // ── Custom Strategy Message (new feature) ──
+  // ── Custom Strategy Message ──
   sendCustomStrategyMsg(asset, stratName, stratSignal, reason, customMsg) {
     if (!this.ok) return;
     const icon = stratSignal === 'CALL' ? '🟢' : '🔴';
+    const arrow = stratSignal === 'CALL' ? '📈' : '📉';
     const now  = fmt6(Math.floor(Date.now()/1000));
     const text =
 `${icon} *Strategy Alert: ${stratName}*
 
-🏛 Asset: *${asset.flag||''} ${asset.name}* (${asset.market||'OTC'})
+${arrow} *${asset.flag||''} ${asset.name}* (${asset.market||'OTC'})
 📊 Signal: \`${stratSignal}\`
 🕐 Time: \`${now}\` *(UTC+6)*
 📝 Reason: _${reason}_
