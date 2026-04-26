@@ -131,7 +131,6 @@ class DB {
   }
 
   _migrate() {
-    // Add new columns if they don't exist (for existing DBs)
     const cols = this.db.prepare("PRAGMA table_info(tg_chats)").all().map(c => c.name);
     if (!cols.includes('perm_custom_strat_msg')) {
       this.db.exec("ALTER TABLE tg_chats ADD COLUMN perm_custom_strat_msg INTEGER DEFAULT 1");
@@ -237,10 +236,6 @@ class DB {
   setAssetLive(sym,v)   { if(this.ok) this.db.prepare('UPDATE assets SET live=? WHERE symbol=?').run(v?1:0,sym); }
   setAssetSignal(sym,v) { if(this.ok) this.db.prepare('UPDATE assets SET signal_on=? WHERE symbol=?').run(v?1:0,sym); }
   addAsset(sym,name,flag,market) { try{ this.db.prepare('INSERT OR REPLACE INTO assets(symbol,name,flag,market,live,signal_on,sort_order) VALUES(?,?,?,?,0,0,99)').run(sym,name,flag||'🔵',market||'OTC'); return true; }catch(e){return false;} }
-  updateAssetOrder(items) {
-    const stmt = this.db.prepare('UPDATE assets SET sort_order=? WHERE symbol=?');
-    items.forEach((sym,i)=>stmt.run(i,sym));
-  }
 
   // CANDLES
   saveCandle(sym,c) {
